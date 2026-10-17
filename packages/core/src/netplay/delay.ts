@@ -14,9 +14,12 @@ const JITTER_MS = 8;
  * An input travels sender -> server -> receiver, which takes about half of
  * each one's round trip. The delay must cover that trip, or the receiver
  * stalls waiting for it; any more than that is lag nobody needs. Players
- * without a measurement yet fall back to the fixed default.
+ * without a measurement yet fall back to the fixed default; a player alone
+ * needs no delay beyond the minimum.
  */
 export function chooseInputDelay(rttsMs: readonly (number | null)[], frameMs = 1000 / NES_FRAME_RATE): number {
+  // Alone, every input is local: nothing has to cross the network in time.
+  if (rttsMs.length === 1) return MIN_INPUT_DELAY;
   if (rttsMs.length === 0 || rttsMs.some((rtt) => rtt === null || !Number.isFinite(rtt))) {
     return NETPLAY_INPUT_DELAY;
   }

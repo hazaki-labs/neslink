@@ -2,7 +2,6 @@ import {
   LockstepSession,
   NETPLAY_PING,
   NETPLAY_PONG,
-  NETPLAY_SEATS,
   type ClientMessage,
   type NetStatus,
   type RoomState,
@@ -12,8 +11,11 @@ import {
 export interface NetplayEvents {
   onStatus(status: NetStatus, reason?: string): void;
   onRoom(room: RoomState, you: string): void;
-  /** The room started; run from power-on with this session. */
-  onStart(session: LockstepSession): void;
+  /**
+   * A game started (or is in progress, for a late spectator): run with this
+   * session, from power-on, or from `snapshot` (base64 save state) if given.
+   */
+  onStart(session: LockstepSession, snapshot: string | null): void;
   /** A game in progress ended (a player left). */
   onEnd(reason: string): void;
   onDesync(frame: number): void;
@@ -63,6 +65,15 @@ export class NetplayLink {
 
   requestStart(): void {
     this.send({ t: "start" });
+  }
+
+  /** Sit in `seat`, or stand up to spectate with null. Lobby only. */
+  takeSeat(seat: number | null): void {
+    this.send({ t: "seat", seat });
+  }
+
+  sendSnapshot(frame: number, state: string): void {
+    this.send({ t: "snapshot", f: frame, s: state });
   }
 
   sendInput(frame: number, mask: number): void {
@@ -115,12 +126,11 @@ export class NetplayLink {
         break;
       case "start": {
         const seat = this.room?.players.find((p) => p.id === this.you)?.seat ?? null;
-        if (seat === null) {
-          this.events.onError("你在观战席，暂不支持观战");
-          return;
-        }
-        this.session = new LockstepSession(NETPLAY_SEATS, seat, message.delay);
-        this.events.onStart(this.session);
+        // Not seated in this game means watching it.
+        const local = seat !== null && message.seats.includes(seat) ? seat : null;
+        this.session = new LockstepSession(message.seats, local, message.delay, message.from?.f ?? 0);
+        for (const [s, f, m] of message.inputs ?? []) this.session.receive(s, f, m);
+        this.events.onStart(this.session, message.from?.s ?? null);
         break;
       }
       case "input":
