@@ -1,4 +1,4 @@
-import type { RoomInfo } from "@neslink/core/netplay";
+import type { ApiErrorCode, RoomInfo } from "@neslink/core/netplay";
 import { Room } from "./room";
 
 export { Room };
@@ -28,7 +28,7 @@ export default {
       if (ws) return room.fetch(request);
       if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
       const info = await room.getInfo();
-      return info ? Response.json(info) : Response.json({ error: "房间不存在" }, { status: 404 });
+      return info ? Response.json(info) : apiError("roomNotFound", 404);
     }
 
     if (url.pathname.startsWith("/api/")) return new Response("Not found", { status: 404 });
@@ -41,15 +41,20 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   try {
     body = await request.json();
   } catch {
-    return Response.json({ error: "请求格式错误" }, { status: 400 });
+    return apiError("badRequest", 400);
   }
   if (typeof body.romHash !== "string" || !SHA1_HEX.test(body.romHash)) {
-    return Response.json({ error: "缺少 ROM 校验值" }, { status: 400 });
+    return apiError("missingRomHash", 400);
   }
   const romName = typeof body.romName === "string" ? body.romName.slice(0, 100) : "";
   const info: RoomInfo = { id: randomId(), romHash: body.romHash, romName };
   await env.ROOMS.get(env.ROOMS.idFromName(info.id)).init(info);
   return Response.json(info, { status: 201 });
+}
+
+/** Errors carry a code; the frontend shows it in the viewer's language. */
+function apiError(code: ApiErrorCode, status: number): Response {
+  return Response.json({ error: code }, { status });
 }
 
 function randomId(): string {

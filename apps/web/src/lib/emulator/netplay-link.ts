@@ -4,6 +4,8 @@ import {
   NETPLAY_PONG,
   type ClientMessage,
   type NetStatus,
+  type RoomEndReason,
+  type RoomErrorCode,
   type RoomState,
   type ServerMessage,
 } from "@neslink/core";
@@ -16,10 +18,10 @@ export interface NetplayEvents {
    * session, from power-on, or from `snapshot` (base64 save state) if given.
    */
   onStart(session: LockstepSession, snapshot: string | null): void;
-  /** A game in progress ended (a player left). */
-  onEnd(reason: string): void;
+  /** A game in progress ended (a player left, or the connection dropped). */
+  onEnd(reason: RoomEndReason): void;
   onDesync(frame: number): void;
-  onError(message: string): void;
+  onError(code: RoomErrorCode): void;
   /** Round trip to the room server in ms (median of recent probes). */
   onPing(rttMs: number): void;
 }
@@ -57,7 +59,7 @@ export class NetplayLink {
       this.closed = true;
       if (this.session) {
         this.session = null;
-        events.onEnd("与房间的连接断开了");
+        events.onEnd("disconnected");
       }
       events.onStatus("closed", event.reason || undefined);
     };
@@ -140,7 +142,7 @@ export class NetplayLink {
         this.events.onDesync(message.f);
         break;
       case "error":
-        this.events.onError(message.message);
+        this.events.onError(message.code);
         break;
     }
   }
@@ -149,7 +151,7 @@ export class NetplayLink {
     this.room = room;
     if (this.session && !room.started) {
       this.session = null;
-      this.events.onEnd("对方离开了房间，游戏结束");
+      this.events.onEnd("peerLeft");
     }
     if (this.you) this.events.onRoom(room, this.you);
   }

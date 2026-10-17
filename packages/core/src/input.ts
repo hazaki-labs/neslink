@@ -3,6 +3,7 @@ import { Button, type ButtonName } from "./types";
 /** Maps KeyboardEvent.code to a button, one map per controller port. */
 export type KeyMap = Record<string, ButtonName>;
 
+/** One keyboard layout, for 1P; a second local player uses a gamepad. */
 export const DEFAULT_KEYMAPS: readonly KeyMap[] = [
   {
     KeyW: "Up",
@@ -13,16 +14,6 @@ export const DEFAULT_KEYMAPS: readonly KeyMap[] = [
     KeyK: "A",
     KeyV: "Select",
     KeyB: "Start",
-  },
-  {
-    ArrowUp: "Up",
-    ArrowDown: "Down",
-    ArrowLeft: "Left",
-    ArrowRight: "Right",
-    Numpad1: "B",
-    Numpad2: "A",
-    Numpad5: "Select",
-    NumpadEnter: "Start",
   },
 ];
 
