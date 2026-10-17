@@ -91,7 +91,7 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
 
       <div
         ref={screenRef}
-        className="relative aspect-[256/240] w-full overflow-hidden rounded-lg bg-black"
+        className="relative aspect-[256/240] w-full overflow-hidden rounded-lg border-2 border-muted-foreground/40 bg-black"
       >
         {message && (
           <div className="absolute inset-x-0 top-3 z-10 mx-auto w-fit rounded-md bg-black/70 px-3 py-1.5 text-sm text-white">
