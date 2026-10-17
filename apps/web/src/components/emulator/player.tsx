@@ -1,20 +1,56 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Download, Maximize, Pause, Play, RotateCcw, Save } from "lucide-react";
-import { NES_HEIGHT, NES_WIDTH } from "@neslink/core";
+import { NES_HEIGHT, NES_WIDTH, type NetStatus, type RoomInfo, type RoomState } from "@neslink/core";
 import { Button } from "@/components/ui/button";
-import { EmulatorClient, type EmulatorStats } from "@/lib/emulator/emulator-client";
+import { EmulatorClient, type EmulatorStats, type NetEvent } from "@/lib/emulator/emulator-client";
 import { useControllerInput } from "@/lib/emulator/use-controller-input";
+import { playerName, roomSocketUrl } from "@/lib/rooms";
 import { getSave, putSave, type StoredRom } from "@/lib/storage";
+import { RoomLobby } from "./room-lobby";
 
 const QUICK_SLOT = 0;
 
-export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) {
+interface NetView {
+  status: NetStatus;
+  room: RoomState | null;
+  you: string | null;
+  /** Our seat while a game is running, else null (in the lobby). */
+  seat: number | null;
+  notice: string | null;
+}
+
+const INITIAL_NET: NetView = { status: "connecting", room: null, you: null, seat: null, notice: null };
+
+function applyNetEvent(view: NetView, event: NetEvent): NetView {
+  switch (event.type) {
+    case "netStatus":
+      return { ...view, status: event.status, seat: event.status === "closed" ? null : view.seat };
+    case "netRoom":
+      return { ...view, room: event.room, you: event.you };
+    case "netStarted":
+      return { ...view, seat: event.seat, notice: null };
+    case "netEnded":
+      return { ...view, seat: null, notice: event.reason };
+    default:
+      return view;
+  }
+}
+
+/** Plays a ROM alone, or in a netplay room when `room` is given. */
+export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo; onExit: () => void }) {
+  const roomId = room?.id ?? null;
   const screenRef = useRef<HTMLDivElement>(null);
   const [client, setClient] = useState<EmulatorClient | null>(null);
   const [paused, setPaused] = useState(false);
   const [stats, setStats] = useState<EmulatorStats | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [hasSave, setHasSave] = useState(false);
+  const [net, setNet] = useState<NetView>(INITIAL_NET);
+
+  function flash(text: string, ms = 2000) {
+    setMessage(text);
+    setTimeout(() => setMessage((current) => (current === text ? null : current)), ms);
+  }
 
   useEffect(() => {
     const screen = screenRef.current!;
@@ -22,11 +58,21 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
       onReady: () => setClient(emulator),
       onStats: setStats,
       onError: (error) => setMessage(error),
+      onNet: (event) => {
+        if (event.type === "netDesync") flash(`检测到画面不同步（第 ${event.frame} 帧）`, 5000);
+        else if (event.type === "netError") flash(event.message, 4000);
+        else setNet((view) => applyNetEvent(view, event));
+      },
     });
     emulator.canvas.className = "[image-rendering:pixelated]";
     screen.appendChild(emulator.canvas);
     const stopFitting = fitIntegerScale(screen, emulator.canvas);
-    emulator.loadRom(rom.data);
+    if (roomId) {
+      emulator.loadRom(rom.data, false);
+      emulator.joinRoom(roomSocketUrl(roomId), playerName(), rom.hash);
+    } else {
+      emulator.loadRom(rom.data);
+    }
     emulator.resumeAudio();
     // Browsers may keep audio suspended until a gesture lands on the page.
     const resume = () => emulator.resumeAudio();
@@ -39,8 +85,9 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
       emulator.destroy();
       emulator.canvas.remove();
       setClient(null);
+      setNet(INITIAL_NET);
     };
-  }, [rom]);
+  }, [rom, roomId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,11 +98,6 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
   }, [rom]);
 
   useControllerInput(client);
-
-  const flash = (text: string) => {
-    setMessage(text);
-    setTimeout(() => setMessage((current) => (current === text ? null : current)), 2000);
-  };
 
   const togglePause = () => {
     client?.setPaused(!paused);
@@ -82,12 +124,23 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="ghost" size="sm" onClick={onExit}>
           <ArrowLeft data-icon="inline-start" />
-          游戏库
+          {roomId ? "离开房间" : "游戏库"}
         </Button>
         <h1 className="mr-auto truncate text-lg font-semibold">{rom.name}</h1>
+        {roomId && (
+          <span className="text-sm text-muted-foreground">
+            房间 <span className="font-mono">{roomId}</span>
+            {net.seat !== null && ` · 你是 ${net.seat + 1}P`}
+          </span>
+        )}
         <span
           className="font-mono text-xs text-muted-foreground tabular-nums"
-          title={stats ? `最近 1 秒内节奏不均的帧：${stats.unevenFrames}` : undefined}
+          title={
+            stats
+              ? `最近 1 秒内节奏不均的帧：${stats.unevenFrames}` +
+                (roomId ? `，等待对方输入的刷新：${stats.netWaits}` : "")
+              : undefined
+          }
         >
           {stats === null ? "--" : stats.fps.toFixed(1)} fps
           {stats?.refreshHz && ` · ${Math.round(stats.refreshHz)}Hz${stats.vsyncLocked ? " 同步" : ""}`}
@@ -98,6 +151,15 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
         ref={screenRef}
         className="relative flex aspect-[256/240] w-full items-center justify-center overflow-hidden rounded-lg border-2 border-muted-foreground/40 bg-black"
       >
+        {roomId && net.seat === null && (
+          <RoomLobby
+            status={net.status}
+            room={net.room}
+            you={net.you}
+            notice={net.notice}
+            onStart={() => client?.startRoom()}
+          />
+        )}
         {message && (
           <div className="absolute inset-x-0 top-3 z-10 mx-auto w-fit rounded-md bg-black/70 px-3 py-1.5 text-sm text-white">
             {message}
@@ -106,6 +168,9 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
       </div>
 
       <div className="flex flex-wrap gap-2">
+        {/* Pause, reset and save states would desync a netplay game. */}
+        {!roomId && (
+          <>
         <Button variant="outline" onClick={togglePause}>
           {paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
           {paused ? "继续" : "暂停"}
@@ -122,6 +187,8 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
           <Download data-icon="inline-start" />
           读取进度
         </Button>
+          </>
+        )}
         <Button variant="outline" className="ml-auto" onClick={() => screenRef.current?.requestFullscreen()}>
           <Maximize data-icon="inline-start" />
           全屏

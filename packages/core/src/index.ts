@@ -4,3 +4,4 @@ export * from "./input";
 export * from "./protocol";
 export * from "./frame-pacer";
 export { WasmCore } from "./wasm-core";
+export * from "./netplay";

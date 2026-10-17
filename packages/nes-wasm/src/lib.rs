@@ -106,6 +106,15 @@ impl Nes {
         self.state.as_ptr()
     }
 
+    /// FNV-1a hash of the 2KB work RAM, for netplay desync checks. Unlike the full
+    /// save state it does not depend on the host audio sample rate.
+    #[wasm_bindgen(js_name = wramHash)]
+    pub fn wram_hash(&self) -> u32 {
+        self.deck.wram().iter().fold(0x811c_9dc5, |hash, &byte| {
+            (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+        })
+    }
+
     #[wasm_bindgen(js_name = loadState)]
     pub fn load_state(&mut self, state: &[u8]) -> Result<(), JsError> {
         self.deck.deserialize_state(state)?;
