@@ -23,6 +23,22 @@ export const NETPLAY_SNAPSHOT_INTERVAL = 600;
 export const NETPLAY_PING = "ping";
 export const NETPLAY_PONG = "pong";
 
+/** Why the room refused a request. The UI turns these into text in the viewer's language. */
+export type RoomErrorCode =
+  | "malformed"
+  | "notHost"
+  | "noPlayers"
+  | "seatLocked"
+  | "seatTaken"
+  | "romMismatch"
+  | "lateJoinUnavailable";
+
+/** Errors from the HTTP rooms API, as `{ error: code }`. */
+export type ApiErrorCode = "roomNotFound" | "badRequest" | "missingRomHash";
+
+/** Why a game in progress ended for this client. */
+export type RoomEndReason = "peerLeft" | "disconnected";
+
 export interface RoomInfo {
   id: string;
   romHash: string;
@@ -80,4 +96,4 @@ export type ServerMessage =
     }
   | { t: "input"; s: number; f: number; m: number }
   | { t: "desync"; f: number }
-  | { t: "error"; message: string };
+  | { t: "error"; code: RoomErrorCode };

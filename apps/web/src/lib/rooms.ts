@@ -1,4 +1,12 @@
-import type { RoomInfo } from "@neslink/core";
+import type { ApiErrorCode, RoomInfo } from "@neslink/core";
+import { messages } from "@/i18n";
+
+/** A failed rooms API call; `code` is worded by the UI in the viewer's language. */
+export class RoomApiError extends Error {
+  constructor(readonly code: ApiErrorCode | "createFailed" | "loadFailed") {
+    super(code);
+  }
+}
 
 export async function createRoom(romHash: string, romName: string): Promise<RoomInfo> {
   const res = await fetch("/api/rooms", {
@@ -6,7 +14,7 @@ export async function createRoom(romHash: string, romName: string): Promise<Room
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ romHash, romName }),
   });
-  if (!res.ok) throw new Error(await errorText(res, "创建房间失败"));
+  if (!res.ok) throw new RoomApiError(await errorCode(res, "createFailed"));
   return res.json();
 }
 
@@ -14,7 +22,7 @@ export async function createRoom(romHash: string, romName: string): Promise<Room
 export async function getRoom(id: string): Promise<RoomInfo | null> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(id)}`);
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(await errorText(res, "读取房间失败"));
+  if (!res.ok) throw new RoomApiError(await errorCode(res, "loadFailed"));
   return res.json();
 }
 
@@ -46,18 +54,20 @@ export function playerName(): string {
   try {
     const saved = localStorage.getItem(NAME_KEY);
     if (saved) return saved;
-    const name = `玩家${Math.floor(1000 + Math.random() * 9000)}`;
+    const name = `${messages().playerNamePrefix}${Math.floor(1000 + Math.random() * 9000)}`;
     localStorage.setItem(NAME_KEY, name);
     return name;
   } catch {
-    return "玩家";
+    return messages().playerNamePrefix;
   }
 }
 
-async function errorText(res: Response, fallback: string): Promise<string> {
+const API_ERROR_CODES: readonly string[] = ["roomNotFound", "badRequest", "missingRomHash"] satisfies ApiErrorCode[];
+
+async function errorCode(res: Response, fallback: RoomApiError["code"]): Promise<RoomApiError["code"]> {
   try {
     const body = (await res.json()) as { error?: string };
-    return body.error ?? fallback;
+    return body.error && API_ERROR_CODES.includes(body.error) ? (body.error as ApiErrorCode) : fallback;
   } catch {
     return fallback;
   }

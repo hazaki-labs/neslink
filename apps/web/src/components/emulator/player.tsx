@@ -1,8 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Download, Maximize, Pause, Play, RotateCcw, Save } from "lucide-react";
-import { NES_FRAME_RATE, NES_HEIGHT, NES_WIDTH, type NetStatus, type RoomInfo, type RoomState } from "@neslink/core";
+import {
+  NES_FRAME_RATE,
+  NES_HEIGHT,
+  NES_WIDTH,
+  type NetStatus,
+  type RoomEndReason,
+  type RoomInfo,
+  type RoomState,
+} from "@neslink/core";
 import { Button } from "@/components/ui/button";
-import { EmulatorClient, type EmulatorStats, type NetEvent } from "@/lib/emulator/emulator-client";
+import { useI18n, type Messages } from "@/i18n";
+import { EmulatorClient, type EmulatorError, type EmulatorStats, type NetEvent } from "@/lib/emulator/emulator-client";
 import { useControllerInput } from "@/lib/emulator/use-controller-input";
 import { playerName, roomSocketUrl } from "@/lib/rooms";
 import { getSave, putSave, type StoredRom } from "@/lib/storage";
@@ -18,7 +27,8 @@ interface NetView {
   playing: boolean;
   /** Our seat in the running game, or null when watching it. */
   seat: number | null;
-  notice: string | null;
+  /** Why the last game ended, if it did. */
+  notice: RoomEndReason | null;
   /** Round trip to the room server, once measured. */
   rttMs: number | null;
   /** Input delay of the running game, in frames. */
@@ -53,6 +63,20 @@ function applyNetEvent(view: NetView, event: NetEvent): NetView {
   }
 }
 
+function describeError(t: Messages, error: EmulatorError): string {
+  switch (error.kind) {
+    case "emulationStopped":
+      return t.player.emulationStopped(error.message);
+    case "audioUnavailable":
+      return t.player.audioUnavailable(error.message);
+    default:
+      return error.message;
+  }
+}
+
+/** Text worded at render time, so switching language rewords what is on screen. */
+type Text = (t: Messages) => string;
+
 /** Plays a ROM alone, or in a netplay room when `room` is given. */
 export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo; onExit: () => void }) {
   const roomId = room?.id ?? null;
@@ -60,13 +84,14 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
   const [client, setClient] = useState<EmulatorClient | null>(null);
   const [paused, setPaused] = useState(false);
   const [stats, setStats] = useState<EmulatorStats | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const { t } = useI18n();
+  const [message, setMessage] = useState<Text | null>(null);
   const [hasSave, setHasSave] = useState(false);
   const [net, setNet] = useState<NetView>(INITIAL_NET);
 
-  function flash(text: string, ms = 2000) {
-    setMessage(text);
-    setTimeout(() => setMessage((current) => (current === text ? null : current)), ms);
+  function flash(text: Text, ms = 2000) {
+    setMessage(() => text);
+    setTimeout(() => setMessage((current: Text | null) => (current === text ? null : current)), ms);
   }
 
   useEffect(() => {
@@ -74,10 +99,10 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     const emulator: EmulatorClient = new EmulatorClient({
       onReady: () => setClient(emulator),
       onStats: setStats,
-      onError: (error) => setMessage(error),
+      onError: (error) => setMessage(() => (t: Messages) => describeError(t, error)),
       onNet: (event) => {
-        if (event.type === "netDesync") flash(`检测到画面不同步（第 ${event.frame} 帧）`, 5000);
-        else if (event.type === "netError") flash(event.message, 4000);
+        if (event.type === "netDesync") flash((t) => t.player.desync(event.frame), 5000);
+        else if (event.type === "netError") flash((t) => t.roomErrors[event.code], 4000);
         else setNet((view) => applyNetEvent(view, event));
       },
     });
@@ -126,14 +151,14 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     const state = await client.saveState();
     await putSave({ romHash: rom.hash, slot: QUICK_SLOT, savedAt: Date.now(), state });
     setHasSave(true);
-    flash("已保存进度");
+    flash((t) => t.player.saved);
   };
 
   const loadState = async () => {
     const save = await getSave(rom.hash, QUICK_SLOT);
     if (!client || !save) return;
     client.loadState(save.state);
-    flash("已读取进度");
+    flash((t) => t.player.loaded);
   };
 
   return (
@@ -141,36 +166,37 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="ghost" size="sm" onClick={onExit}>
           <ArrowLeft data-icon="inline-start" />
-          {roomId ? "离开房间" : "游戏库"}
+          {roomId ? t.player.leaveRoom : t.library.title}
         </Button>
         <h1 className="mr-auto truncate text-lg font-semibold">{rom.name}</h1>
         {roomId && (
           <span className="text-sm text-muted-foreground">
-            房间 <span className="font-mono">{roomId}</span>
-            {net.playing && (net.seat !== null ? ` · 你是 ${net.seat + 1}P` : " · 观战中")}
+            {t.player.room} <span className="font-mono">{roomId}</span>
+            {net.playing && ` · ${net.seat !== null ? t.player.youAre(net.seat + 1) : t.player.spectating}`}
           </span>
         )}
         {roomId && net.rttMs !== null && (
           <span
             className="font-mono text-xs text-muted-foreground tabular-nums"
-            title="网络：到房间服务器的往返时间。输入延迟：按键到生效之间固定等待的帧数，用来等对方的输入到达。"
+            title={t.player.latencyTitle}
           >
-            网络 {Math.round(net.rttMs)}ms
-            {net.playing && net.seat !== null && net.delayFrames !== null &&
-              ` · 输入延迟 ${net.delayFrames} 帧（${Math.round((net.delayFrames * 1000) / NES_FRAME_RATE)}ms）`}
+            {t.player.network(Math.round(net.rttMs))}
+            {net.playing &&
+              net.seat !== null &&
+              net.delayFrames !== null &&
+              ` · ${t.player.inputDelay(net.delayFrames, NES_FRAME_RATE)}`}
           </span>
         )}
         <span
           className="font-mono text-xs text-muted-foreground tabular-nums"
           title={
             stats
-              ? `最近 1 秒内节奏不均的帧：${stats.unevenFrames}` +
-                (roomId ? `，等待对方输入的刷新：${stats.netWaits}` : "")
+              ? t.player.statsTitle(stats.unevenFrames) + (roomId ? t.player.statsNetTitle(stats.netWaits) : "")
               : undefined
           }
         >
           {stats === null ? "--" : stats.fps.toFixed(1)} fps
-          {stats?.refreshHz && ` · ${Math.round(stats.refreshHz)}Hz${stats.vsyncLocked ? " 同步" : ""}`}
+          {stats?.refreshHz && ` · ${Math.round(stats.refreshHz)}Hz${stats.vsyncLocked ? ` ${t.player.vsync}` : ""}`}
         </span>
       </div>
 
@@ -190,7 +216,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         )}
         {message && (
           <div className="absolute inset-x-0 top-3 z-10 mx-auto w-fit rounded-md bg-black/70 px-3 py-1.5 text-sm text-white">
-            {message}
+            {message(t)}
           </div>
         )}
       </div>
@@ -201,43 +227,37 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
           <>
         <Button variant="outline" onClick={togglePause}>
           {paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
-          {paused ? "继续" : "暂停"}
+          {paused ? t.player.resume : t.player.pause}
         </Button>
         <Button variant="outline" onClick={() => client?.reset()}>
           <RotateCcw data-icon="inline-start" />
-          重置
+          {t.player.reset}
         </Button>
         <Button variant="outline" onClick={saveState}>
           <Save data-icon="inline-start" />
-          保存进度
+          {t.player.save}
         </Button>
         <Button variant="outline" onClick={loadState} disabled={!hasSave}>
           <Download data-icon="inline-start" />
-          读取进度
+          {t.player.load}
         </Button>
           </>
         )}
         <Button variant="outline" className="ml-auto" onClick={() => screenRef.current?.requestFullscreen()}>
           <Maximize data-icon="inline-start" />
-          全屏
+          {t.player.fullscreen}
         </Button>
       </div>
 
-      <dl className="grid grid-cols-[auto_1fr_1fr] gap-x-6 gap-y-1 text-sm text-muted-foreground">
-        <dt />
-        <dd className="font-medium text-foreground">1P</dd>
-        <dd className="font-medium text-foreground">2P</dd>
-        <dt>方向</dt>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm text-muted-foreground">
+        <dt>{t.player.controls.dpad}</dt>
         <dd>W A S D</dd>
-        <dd>方向键</dd>
         <dt>B / A</dt>
         <dd>J / K</dd>
-        <dd>小键盘 1 / 2</dd>
         <dt>Select / Start</dt>
         <dd>V / B</dd>
-        <dd>小键盘 5 / 小键盘 Enter</dd>
-        <dt>手柄</dt>
-        <dd className="col-span-2">按连接顺序分配给 1P、2P</dd>
+        <dt>{t.player.controls.gamepad}</dt>
+        <dd>{t.player.controls.gamepadHint}</dd>
       </dl>
     </div>
   );
