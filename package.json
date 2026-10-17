@@ -2,11 +2,13 @@
   "name": "neslink",
   "private": true,
   "scripts": {
-    "dev": "pnpm --filter @neslink/web dev",
+    "dev": "pnpm --parallel --filter @neslink/web --filter @neslink/server dev",
     "build:wasm": "pnpm --filter @neslink/nes-wasm build",
     "build": "pnpm --filter @neslink/web build",
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "deploy": "pnpm --filter @neslink/server run deploy",
+    "test": "pnpm -r test"
   },
   "packageManager": "pnpm@12.14.0"
 }

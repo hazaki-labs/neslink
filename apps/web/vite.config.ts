@@ -10,4 +10,8 @@ export default defineConfig({
   },
   // The emulator worker is an ES module (it imports the wasm-bindgen glue).
   worker: { format: "es" },
+  server: {
+    // Rooms API and WebSockets come from `wrangler dev` (apps/server) in development.
+    proxy: { "/api": { target: "http://localhost:8787", ws: true } },
+  },
 });

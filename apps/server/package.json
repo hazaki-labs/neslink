@@ -1,0 +1,19 @@
+{
+  "name": "@neslink/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node -e \"require('fs').mkdirSync('../web/dist',{recursive:true})\" && wrangler dev --port 8787",
+    "deploy": "pnpm --filter @neslink/web build && wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@neslink/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261016.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.151.1"
+  }
+}

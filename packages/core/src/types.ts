@@ -46,4 +46,6 @@ export interface EmulatorCore {
   framebuffer(): Uint8ClampedArray<ArrayBuffer>;
   /** Mono samples produced since the last call (the NES has one audio channel). */
   drainAudio(): Float32Array<ArrayBuffer>;
+  /** Hash of emulated state that must match across machines in netplay. */
+  stateHash(): number;
 }
