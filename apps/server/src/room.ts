@@ -19,6 +19,8 @@ const MAX_CONNECTIONS = 16;
 const MAX_LOGGED_INPUTS = 900_000;
 /** Base64 of a save state is ~30KB; anything far larger is not one. */
 const MAX_SNAPSHOT_CHARS = 512 * 1024;
+/** SDP offers with many candidates run a few KB; this is generous. */
+const MAX_SIGNAL_CHARS = 32 * 1024;
 
 /** Per-socket player data. Stored on the socket so it survives hibernation. */
 interface Attachment extends RoomPlayer {
@@ -127,6 +129,9 @@ export class Room extends DurableObject<Env> {
         if (this.playing(me) && isFrame(message.f) && typeof message.s === "string") {
           this.storeSnapshot(me.seat, message.f, message.s);
         }
+        break;
+      case "signal":
+        if (me && typeof message.to === "string") this.relaySignal(me, message.to, message.data);
         break;
       case "rtt":
         if (me && Number.isFinite(message.ms) && message.ms >= 0 && message.ms < 10_000) {
@@ -253,6 +258,14 @@ export class Room extends DurableObject<Env> {
       await this.ctx.storage.setAlarm(Date.now() + IDLE_TTL_MS);
     }
     this.broadcast({ t: "room", room: this.state() }, ws);
+  }
+
+  /** Pass WebRTC signaling between two people in the room, so players can connect directly. */
+  private relaySignal(me: Attachment, to: string, data: unknown) {
+    if (JSON.stringify(data ?? null).length > MAX_SIGNAL_CHARS) return;
+    for (const ws of this.ctx.getWebSockets()) {
+      if (this.player(ws)?.id === to) return this.send(ws, { t: "signal", from: me.id, data });
+    }
   }
 
   private logInput(seat: number, frame: number, mask: number) {

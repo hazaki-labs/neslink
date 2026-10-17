@@ -77,7 +77,9 @@ export type ClientMessage =
   /** This player's measured round trip to the room, for choosing the input delay. */
   | { t: "rtt"; ms: number }
   /** Save state `s` (base64) taken before running frame `f`. */
-  | { t: "snapshot"; f: number; s: string };
+  | { t: "snapshot"; f: number; s: string }
+  /** WebRTC signaling (offer, answer, ICE candidate) for player `to`; relayed as is. */
+  | { t: "signal"; to: string; data: unknown };
 
 export type ServerMessage =
   | { t: "welcome"; you: string; room: RoomState }
@@ -97,4 +99,5 @@ export type ServerMessage =
     }
   | { t: "input"; s: number; f: number; m: number; a?: number }
   | { t: "desync"; f: number }
+  | { t: "signal"; from: string; data: unknown }
   | { t: "error"; code: RoomErrorCode };
