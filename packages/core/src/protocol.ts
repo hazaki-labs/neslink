@@ -23,6 +23,8 @@ export type ToWorker =
   | { type: "netJoin"; url: string; name: string; romHash: string }
   /** Host only: ask the room to start. */
   | { type: "netStart" }
+  /** Lobby: sit in a seat, or null to spectate. */
+  | { type: "netSeat"; seat: number | null }
   | { type: "netLeave" };
 
 export type NetStatus = "connecting" | "open" | "closed";
@@ -47,8 +49,8 @@ export type FromWorker =
   | { type: "error"; message: string }
   | { type: "netStatus"; status: NetStatus; reason?: string }
   | { type: "netRoom"; room: RoomState; you: string }
-  /** `delay`: input delay in frames for this game. */
-  | { type: "netStarted"; seat: number; delay: number }
+  /** `seat` null: watching. `delay`: input delay in frames for this game. */
+  | { type: "netStarted"; seat: number | null; delay: number }
   /** Round trip to the room server in ms. */
   | { type: "netPing"; rttMs: number }
   | { type: "netEnded"; reason: string }

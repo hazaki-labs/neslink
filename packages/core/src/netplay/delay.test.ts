@@ -20,6 +20,11 @@ describe("chooseInputDelay", () => {
     expect(chooseInputDelay([20, 120])).toBe(6);
   });
 
+  it("uses the minimum for a player alone", () => {
+    expect(chooseInputDelay([300])).toBe(MIN_INPUT_DELAY);
+    expect(chooseInputDelay([null])).toBe(MIN_INPUT_DELAY);
+  });
+
   it("stays within bounds", () => {
     expect(chooseInputDelay([0, 0])).toBe(MIN_INPUT_DELAY);
     expect(chooseInputDelay([400, 400])).toBe(MAX_INPUT_DELAY);
