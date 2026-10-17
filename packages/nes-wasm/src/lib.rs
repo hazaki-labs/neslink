@@ -20,6 +20,7 @@ pub struct Nes {
     frame: Box<[u8; Frame::SIZE]>,
     audio: Vec<f32>,
     state: Vec<u8>,
+    sample_rate: f32,
 }
 
 #[wasm_bindgen]
@@ -44,6 +45,7 @@ impl Nes {
             frame: Box::new([0xFF; Frame::SIZE]),
             audio: Vec::new(),
             state: Vec::new(),
+            sample_rate,
         }
     }
 
@@ -118,6 +120,10 @@ impl Nes {
     #[wasm_bindgen(js_name = loadState)]
     pub fn load_state(&mut self, state: &[u8]) -> Result<(), JsError> {
         self.deck.deserialize_state(state)?;
+        // The state carries the APU of the machine that saved it, including its
+        // output sample rate; a netplay snapshot may come from another machine.
+        self.deck.set_sample_rate(self.sample_rate);
+        self.deck.clear_audio_samples();
         Ok(())
     }
 }

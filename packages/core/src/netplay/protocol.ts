@@ -3,11 +3,25 @@
  * Messages are small JSON objects; inputs are a few bytes per frame per player.
  */
 
-/** Frames between pressing a button and the frame it takes effect on. Hides relay latency. */
+/**
+ * Frames between pressing a button and the frame it takes effect on, which hides relay
+ * latency. Used until both players have measured their latency (see chooseInputDelay).
+ */
 export const NETPLAY_INPUT_DELAY = 4;
 /** How often (in frames) players report a state hash so the server can spot desyncs. */
 export const NETPLAY_HASH_INTERVAL = 60;
 export const NETPLAY_SEATS = 2;
+/**
+ * How often (in frames) the first seated player uploads a save state, so a
+ * spectator arriving mid-game can start from it instead of from power-on.
+ */
+export const NETPLAY_SNAPSHOT_INTERVAL = 600;
+/**
+ * Latency probe: the room answers this exact text frame with NETPLAY_PONG
+ * itself (Durable Object auto-response), without running room code.
+ */
+export const NETPLAY_PING = "ping";
+export const NETPLAY_PONG = "pong";
 
 export interface RoomInfo {
   id: string;
@@ -22,6 +36,8 @@ export interface RoomPlayer {
   seat: number | null;
   /** Hash of the ROM this player has loaded; must equal the room's to play. */
   romHash: string;
+  /** Latest round trip this player measured to the room, if any yet. */
+  rttMs: number | null;
 }
 
 export interface RoomState {
@@ -33,17 +49,35 @@ export interface RoomState {
 
 export type ClientMessage =
   | { t: "hello"; name: string; romHash: string }
-  /** Host only: begin the game once every seat is filled. */
+  /** Before a game: sit in a seat, or stand up to spectate (null). */
+  | { t: "seat"; seat: number | null }
+  /** Host only: begin the game with whoever is seated (at least one). */
   | { t: "start" }
   /** Local input `m` for frame `f`. */
   | { t: "input"; f: number; m: number }
   /** State hash `h` after running frame `f`. */
-  | { t: "hash"; f: number; h: number };
+  | { t: "hash"; f: number; h: number }
+  /** This player's measured round trip to the room, for choosing the input delay. */
+  | { t: "rtt"; ms: number }
+  /** Save state `s` (base64) taken before running frame `f`. */
+  | { t: "snapshot"; f: number; s: string };
 
 export type ServerMessage =
   | { t: "welcome"; you: string; room: RoomState }
   | { t: "room"; room: RoomState }
-  | { t: "start"; delay: number }
+  | {
+      t: "start";
+      delay: number;
+      /** Seats taking part; the others read no input. */
+      seats: number[];
+      /**
+       * For a spectator joining mid-game: the snapshot to start from, plus every
+       * input logged since it. Absent means start from power-on at frame 0
+       * (with any inputs logged so far).
+       */
+      from?: { f: number; s: string };
+      inputs?: [seat: number, frame: number, mask: number][];
+    }
   | { t: "input"; s: number; f: number; m: number }
   | { t: "desync"; f: number }
   | { t: "error"; message: string };

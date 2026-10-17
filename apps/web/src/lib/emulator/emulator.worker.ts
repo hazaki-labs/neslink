@@ -5,6 +5,7 @@ import {
   NES_HEIGHT,
   NES_WIDTH,
   NETPLAY_HASH_INTERVAL,
+  NETPLAY_SNAPSHOT_INTERVAL,
   type FromWorker,
   type ToAudio,
   type ToWorker,
@@ -46,6 +47,13 @@ let link: NetplayLink | null = null;
 /** Netplay frames the clock says are due but that are still waiting on remote input. */
 let owedFrames = 0;
 let netWaits = 0;
+/**
+ * A spectator further than this behind the newest input it holds is catching
+ * up (joined mid-game, or the tab was busy) and fast-forwards.
+ */
+const SPECTATOR_SLACK = 2;
+/** Frames a catching-up spectator runs per refresh: ~25ms of emulation. */
+const CATCH_UP_FRAMES = 30;
 
 function post(message: FromWorker, transfer: Transferable[] = []) {
   scope.postMessage(message, transfer);
@@ -65,23 +73,29 @@ function running() {
   return link === null || inNetGame();
 }
 
-function step(frameInputs: readonly number[]) {
+function step(frameInputs: readonly number[], audio = true) {
   core!.runFrame(frameInputs);
   frame++;
   fpsFrames++;
   const samples = core!.drainAudio();
-  if (samples.length > 0) postAudio({ type: "samples", samples }, [samples.buffer]);
+  // Fast-forwarded frames would arrive as a burst of sound; drop it.
+  if (audio && samples.length > 0) postAudio({ type: "samples", samples }, [samples.buffer]);
 }
 
-function stepNetplay() {
+function stepNetplay(audio = true) {
   const session = link!.session!;
   // Either keyboard layout drives the local seat; the seat itself comes from the room.
   const local = inputs[0] | inputs[1];
   const { inputs: frameInputs, localFrame } = session.advance(local);
-  link!.sendInput(localFrame, local);
-  step(frameInputs);
+  if (localFrame !== null) link!.sendInput(localFrame, local);
+  step(frameInputs, audio);
+  if (session.spectating) return;
   if (session.frame % NETPLAY_HASH_INTERVAL === 0) {
     link!.sendHash(session.frame - 1, core!.stateHash());
+  }
+  // The first seat keeps the room's snapshot fresh for spectators who join late.
+  if (session.localSeat === session.activeSeats[0] && session.frame % NETPLAY_SNAPSHOT_INTERVAL === 0) {
+    link!.sendSnapshot(session.frame, toBase64(core!.saveState()));
   }
 }
 
@@ -100,15 +114,22 @@ function tick(now: number) {
   try {
     if (inNetGame()) {
       const session = link!.session!;
-      // Frames we could not run while waiting are made up once input arrives, but
-      // only a few, so a long wait does not turn into a fast-forward.
-      owedFrames = Math.min(owedFrames + due, session.delay);
-      while (owedFrames > 0 && session.ready()) {
-        stepNetplay();
-        owedFrames--;
-        ran++;
+      const backlog = session.spectating ? session.available(CATCH_UP_FRAMES + session.delay + SPECTATOR_SLACK) : 0;
+      if (backlog > session.delay + SPECTATOR_SLACK) {
+        // Spectator behind the game: run ahead silently until close to live.
+        for (const n = Math.min(CATCH_UP_FRAMES, backlog - session.delay); ran < n; ran++) stepNetplay(false);
+        owedFrames = 0;
+      } else {
+        // Frames we could not run while waiting are made up once input arrives, but
+        // only a few, so a long wait does not turn into a fast-forward.
+        owedFrames = Math.min(owedFrames + due, session.delay);
+        while (owedFrames > 0 && session.ready()) {
+          stepNetplay();
+          owedFrames--;
+          ran++;
+        }
+        if (owedFrames > 0) netWaits++;
       }
-      if (owedFrames > 0) netWaits++;
     } else {
       for (; ran < due; ran++) step(inputs);
     }
@@ -183,14 +204,16 @@ function joinRoom(url: string, name: string, romHash: string) {
   link = new NetplayLink(url, { name, romHash }, {
     onStatus: (status, reason) => post({ type: "netStatus", status, reason }),
     onRoom: (room, you) => post({ type: "netRoom", room, you }),
-    onStart: (session) => {
+    onStart: (session, snapshot) => {
       if (!core || !rom) return;
-      // Every player powers on the same cartridge, so all cores start identical.
+      // Every player powers on the same cartridge, so all cores start identical;
+      // a late spectator then jumps to the room's latest snapshot.
       core.loadRom(rom);
+      if (snapshot) core.loadState(fromBase64(snapshot));
       romLoaded = true;
-      frame = 0;
+      frame = session.frame;
       owedFrames = 0;
-      post({ type: "netStarted", seat: session.localSeat });
+      post({ type: "netStarted", seat: session.localSeat, delay: session.delay });
       start();
     },
     onEnd: (reason) => {
@@ -199,6 +222,7 @@ function joinRoom(url: string, name: string, romHash: string) {
     },
     onDesync: (desyncFrame) => post({ type: "netDesync", frame: desyncFrame }),
     onError: (message) => post({ type: "netError", message }),
+    onPing: (rttMs) => post({ type: "netPing", rttMs }),
   });
 }
 
@@ -260,6 +284,9 @@ async function handle(message: ToWorker) {
     case "netStart":
       link?.requestStart();
       break;
+    case "netSeat":
+      link?.takeSeat(message.seat);
+      break;
     case "netLeave":
       cancel();
       link?.close();
@@ -276,6 +303,18 @@ scope.onmessage = (event: MessageEvent<ToWorker>) => {
     .then(() => handle(event.data))
     .catch((error) => post({ type: "error", message: errorMessage(error) }));
 };
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function fromBase64(text: string): Uint8Array {
+  return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+}
 
 // wasm-bindgen JsError values arrive as Error, but be defensive about thrown strings.
 function errorMessage(error: unknown) {
