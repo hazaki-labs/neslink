@@ -2,12 +2,12 @@
 
 A platform for playing NES games in the browser, built toward multiplayer netplay (input sync + rollback).
 
-Current milestone: **M1 netplay (lockstep) + spectating**.
+Current milestone: **M2 rollback netplay + spectating**.
 
 - **Single player**: load a local `.nes` file and play, with quick save/load. ROMs and saves live only in the browser's IndexedDB and are never uploaded.
-- **Netplay**: click **Netplay** on a game in the library to create a room, then share the room link. Everyone who joins loads their own copy of the same ROM (checked by SHA-1). The host takes 1P automatically; others join as spectators and can click **Sit** to take a free seat. The host can start once at least one person is seated (in a solo game everyone else watches). Seated players run from power-on in lockstep, exchanging only their controller input for each frame. The input delay is picked from the players' measured latency (1–8 frames), and a work-RAM hash is compared every 60 frames to detect desyncs.
+- **Netplay**: click **Netplay** on a game in the library to create a room, then share the room link. Everyone who joins loads their own copy of the same ROM (checked by SHA-1). The host takes 1P automatically; others join as spectators and can click **Sit** to take a free seat. The host can start once at least one person is seated (in a solo game everyone else watches). Seated players run from power-on, exchanging only their controller input for each frame, with **rollback**: your own input takes effect after a small delay (1–4 frames, picked from both players' measured latency), and the other player's input is predicted until it arrives. When a prediction turns out wrong, the game reloads the state from before that frame and silently re-simulates up to the present, so neither player waits on the network. Players never run more than a few frames ahead of what is confirmed (the window is sized to what the device can re-simulate in ~12 ms), the side that runs ahead yields a frame now and then, and a work-RAM hash of confirmed frames is compared every 60 frames to detect desyncs.
 - **Languages**: the UI is in English and Chinese. It follows the browser language on the first visit, and can be switched (and is remembered) from the library page.
-- **Spectating**: anyone with the link can watch, even mid-game. The lowest-seated player uploads a save-state snapshot to the room every 600 frames (~10 s); a spectator joining mid-game starts from the latest snapshot and fast-forwards (muted) to live.
+- **Spectating**: anyone with the link can watch, even mid-game. The lowest-seated player uploads a save-state snapshot to the room every 600 frames (~10 s); a spectator joining mid-game starts from the latest snapshot and fast-forwards (muted) to live. Spectators only ever see confirmed inputs, never predictions.
 
 ## Layout
 
@@ -17,7 +17,7 @@ apps/web           Vite + React frontend (library, player, room lobby); builds t
 apps/server        Cloudflare Worker: serves the built frontend and /api; one Durable Object per room
                    handles seating, relays inputs and compares hashes
 packages/core      Emulator core interface, WASM core adapter, input mapping, frame pacing,
-                   worker message protocol, netplay protocol and lockstep session
+                   worker message protocol, netplay protocol, rollback and lockstep sessions
 packages/nes-wasm  Rust wrapper: tetanes-core compiled to WebAssembly (wasm-bindgen)
 ```
 
@@ -30,6 +30,8 @@ The compiled WASM in `packages/nes-wasm/pkg` is checked in, so frontend-only wor
 ```bash
 pnpm build:wasm
 ```
+
+To try netplay at a given latency on one machine, add `?lag=150&jitter=30` (milliseconds) to a room URL: that tab's connection gets that much extra round trip and random jitter. The latency readout includes it.
 
 ```bash
 pnpm install
