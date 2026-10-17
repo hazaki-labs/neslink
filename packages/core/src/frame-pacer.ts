@@ -34,11 +34,16 @@ export class FramePacer {
     this.timeAcc = 0;
   }
 
-  /** Median refresh interval, once enough refreshes have been seen. */
+  /**
+   * Typical refresh interval, once enough refreshes have been seen: the mean
+   * of the middle half. A plain median lands on one side when timestamps
+   * jitter bimodally (16.3 / 17.1ms alternating) and can miss the lock.
+   */
   refreshMs(): number | null {
     if (this.deltas.length < MIN_SAMPLES) return null;
     const sorted = [...this.deltas].sort((a, b) => a - b);
-    return sorted[sorted.length >> 1];
+    const middle = sorted.slice(sorted.length >> 2, sorted.length - (sorted.length >> 2));
+    return middle.reduce((sum, d) => sum + d, 0) / middle.length;
   }
 
   /** Refreshes per emulated frame while locked, else null. */

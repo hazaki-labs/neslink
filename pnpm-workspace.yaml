@@ -3,5 +3,8 @@ packages:
   - packages/*
 
 allowBuilds:
+  # wrangler: esbuild and workerd verify/unpack their platform binaries on install.
+  esbuild: true
+  workerd: true
   sharp: false
   unrs-resolver: false

@@ -28,6 +28,11 @@ export class Nes {
      */
     saveState(): number;
     statePtr(): number;
+    /**
+     * FNV-1a hash of the 2KB work RAM, for netplay desync checks. Unlike the full
+     * save state it does not depend on the host audio sample rate.
+     */
+    wramHash(): number;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -45,6 +50,7 @@ export interface InitOutput {
     readonly nes_runFrame: (a: number, b: number, c: number) => [number, number];
     readonly nes_saveState: (a: number) => [number, number, number];
     readonly nes_statePtr: (a: number) => number;
+    readonly nes_wramHash: (a: number) => number;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

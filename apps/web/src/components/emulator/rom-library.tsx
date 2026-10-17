@@ -1,15 +1,23 @@
 import { useEffect, useRef, useState } from "react";
-import { Gamepad2, Play, Trash2, Upload } from "lucide-react";
+import { Gamepad2, Play, Trash2, Upload, Users } from "lucide-react";
 import { hashRom, parseRomHeader } from "@neslink/core";
 import { Button } from "@/components/ui/button";
 import { deleteRom, listRoms, putRom, type StoredRom } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
-export function RomLibrary({ onPlay }: { onPlay: (rom: StoredRom) => void }) {
+export function RomLibrary({
+  onPlay,
+  onHost,
+}: {
+  onPlay: (rom: StoredRom) => void;
+  /** Create a netplay room for this ROM. */
+  onHost: (rom: StoredRom) => Promise<void>;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [roms, setRoms] = useState<StoredRom[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [hosting, setHosting] = useState<string | null>(null);
 
   useEffect(() => {
     listRoms().then(setRoms, (e: Error) => setError(`无法读取本地游戏库：${e.message}`));
@@ -39,6 +47,17 @@ export function RomLibrary({ onPlay }: { onPlay: (rom: StoredRom) => void }) {
     setRoms(await listRoms());
     // A single new file most likely means "play this now".
     if (last && files.length === 1) onPlay(last);
+  };
+
+  const host = async (rom: StoredRom) => {
+    setError(null);
+    setHosting(rom.hash);
+    try {
+      await onHost(rom);
+    } catch (e) {
+      setError((e as Error).message);
+      setHosting(null);
+    }
   };
 
   const remove = async (hash: string) => {
@@ -106,6 +125,10 @@ export function RomLibrary({ onPlay }: { onPlay: (rom: StoredRom) => void }) {
               <Button size="sm" onClick={() => onPlay(rom)}>
                 <Play data-icon="inline-start" />
                 开始
+              </Button>
+              <Button size="sm" variant="outline" disabled={hosting !== null} onClick={() => host(rom)}>
+                <Users data-icon="inline-start" />
+                {hosting === rom.hash ? "创建中…" : "联机"}
               </Button>
               <Button size="icon-sm" variant="ghost" aria-label={`删除 ${rom.name}`} onClick={() => remove(rom.hash)}>
                 <Trash2 />
