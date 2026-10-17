@@ -7,14 +7,16 @@ import {
   type FromWorker,
   type ToAudio,
   type ToWorker,
+  FramePacer,
   WasmCore,
 } from "@neslink/core";
 
 const FRAME_MS = 1000 / NES_FRAME_RATE;
-/** Most frames we run to catch up before giving up and resyncing the clock. */
-const MAX_CATCH_UP = 4;
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
+// Worker rAF fires in step with the display, which is what makes pacing smooth.
+// Without it (older browsers) fall back to a timer, paced by wall-clock time.
+const hasRaf = typeof scope.requestAnimationFrame === "function";
 
 let core: WasmCore | null = null;
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
@@ -22,13 +24,16 @@ let image: ImageData | null = null;
 let audioPort: MessagePort | null = null;
 
 const inputs = new Array<number>(MAX_PLAYERS).fill(0);
+const pacer = new FramePacer(FRAME_MS, hasRaf);
 let romLoaded = false;
 let paused = false;
 let frame = 0;
-let nextFrameAt = 0;
-let timer: ReturnType<typeof setTimeout> | null = null;
-let fpsWindowStart = 0;
+let scheduled: number | null = null;
+let fpsWindowStart: number | null = null;
 let fpsFrames = 0;
+/** Refreshes since the last rendered frame, and how many frames broke the rhythm. */
+let refreshesSinceRender = 0;
+let unevenFrames = 0;
 
 function post(message: FromWorker, transfer: Transferable[] = []) {
   scope.postMessage(message, transfer);
@@ -55,45 +60,69 @@ function render() {
   ctx!.putImageData(image!, 0, 0);
 }
 
-function tick() {
-  timer = null;
+function tick(now: number) {
+  scheduled = null;
   if (!running()) return;
+  schedule();
 
-  const now = performance.now();
-  let ran = 0;
+  const frames = pacer.advance(now);
   try {
-    while (now >= nextFrameAt && ran < MAX_CATCH_UP) {
-      step();
-      nextFrameAt += FRAME_MS;
-      ran++;
-    }
+    for (let i = 0; i < frames; i++) step();
   } catch (error) {
     romLoaded = false;
     post({ type: "error", message: `Emulation stopped: ${errorMessage(error)}` });
     return;
   }
-  // Fell too far behind (tab throttled, debugger, slow device): drop the backlog.
-  if (now - nextFrameAt > FRAME_MS * MAX_CATCH_UP) nextFrameAt = now + FRAME_MS;
-  if (ran > 0) render();
 
-  if (now - fpsWindowStart >= 1000) {
-    post({ type: "stats", fps: (fpsFrames * 1000) / (now - fpsWindowStart), frame });
+  refreshesSinceRender++;
+  if (frames === 0) return;
+  render();
+  const n = pacer.lockedInterval();
+  if (n !== null && refreshesSinceRender !== n) unevenFrames++;
+  refreshesSinceRender = 0;
+
+  // Open and close the fps window on frame-producing refreshes only. Closing on
+  // whichever refresh first passes 1s would make a window hold 60 or 61 frames
+  // at random and read 59.5 / 60.9 even when pacing is perfect.
+  if (fpsWindowStart === null) {
     fpsWindowStart = now;
     fpsFrames = 0;
+  } else if (now - fpsWindowStart >= 1000) {
+    const refreshMs = pacer.refreshMs();
+    post({
+      type: "stats",
+      fps: (fpsFrames * 1000) / (now - fpsWindowStart),
+      frame,
+      refreshHz: hasRaf && refreshMs ? 1000 / refreshMs : null,
+      vsyncLocked: pacer.lockedInterval() !== null,
+      unevenFrames,
+    });
+    fpsWindowStart = now;
+    fpsFrames = 0;
+    unevenFrames = 0;
   }
-
-  schedule();
 }
 
 function schedule() {
-  if (timer !== null || !running()) return;
-  timer = setTimeout(tick, Math.max(0, nextFrameAt - performance.now()));
+  if (scheduled !== null || !running()) return;
+  scheduled = hasRaf
+    ? scope.requestAnimationFrame(tick)
+    : (setTimeout(() => tick(performance.now()), FRAME_MS / 4) as unknown as number);
+}
+
+function cancel() {
+  if (scheduled === null) return;
+  if (hasRaf) scope.cancelAnimationFrame(scheduled);
+  else clearTimeout(scheduled);
+  scheduled = null;
 }
 
 function start() {
-  nextFrameAt = performance.now();
-  fpsWindowStart = nextFrameAt;
+  pacer.reset();
+  fpsWindowStart = null;
   fpsFrames = 0;
+  refreshesSinceRender = 0;
+  unevenFrames = 0;
   postAudio({ type: "flush" });
   schedule();
 }
@@ -123,11 +152,8 @@ async function handle(message: ToWorker) {
       break;
     case "pause":
       paused = message.paused;
-      if (paused && timer !== null) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      if (!paused) start();
+      if (paused) cancel();
+      else start();
       break;
     case "reset":
       core?.reset();

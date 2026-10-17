@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Download, Maximize, Pause, Play, RotateCcw, Save } from "lucide-react";
+import { NES_HEIGHT, NES_WIDTH } from "@neslink/core";
 import { Button } from "@/components/ui/button";
-import { EmulatorClient } from "@/lib/emulator/emulator-client";
+import { EmulatorClient, type EmulatorStats } from "@/lib/emulator/emulator-client";
 import { useControllerInput } from "@/lib/emulator/use-controller-input";
 import { getSave, putSave, type StoredRom } from "@/lib/storage";
 
@@ -13,7 +14,7 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
   const screenRef = useRef<HTMLDivElement>(null);
   const [client, setClient] = useState<EmulatorClient | null>(null);
   const [paused, setPaused] = useState(false);
-  const [fps, setFps] = useState<number | null>(null);
+  const [stats, setStats] = useState<EmulatorStats | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [hasSave, setHasSave] = useState(false);
 
@@ -21,11 +22,12 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
     const screen = screenRef.current!;
     const emulator: EmulatorClient = new EmulatorClient({
       onReady: () => setClient(emulator),
-      onStats: ({ fps }) => setFps(fps),
+      onStats: setStats,
       onError: (error) => setMessage(error),
     });
-    emulator.canvas.className = "size-full object-contain [image-rendering:pixelated]";
+    emulator.canvas.className = "[image-rendering:pixelated]";
     screen.appendChild(emulator.canvas);
+    const stopFitting = fitIntegerScale(screen, emulator.canvas);
     emulator.loadRom(rom.data);
     emulator.resumeAudio();
     // Browsers may keep audio suspended until a gesture lands on the page.
@@ -33,6 +35,7 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
     window.addEventListener("pointerdown", resume);
     window.addEventListener("keydown", resume);
     return () => {
+      stopFitting();
       window.removeEventListener("pointerdown", resume);
       window.removeEventListener("keydown", resume);
       emulator.destroy();
@@ -84,14 +87,18 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
           游戏库
         </Button>
         <h1 className="mr-auto truncate text-lg font-semibold">{rom.name}</h1>
-        <span className="font-mono text-xs text-muted-foreground tabular-nums">
-          {fps === null ? "--" : fps.toFixed(1)} fps
+        <span
+          className="font-mono text-xs text-muted-foreground tabular-nums"
+          title={stats ? `最近 1 秒内节奏不均的帧：${stats.unevenFrames}` : undefined}
+        >
+          {stats === null ? "--" : stats.fps.toFixed(1)} fps
+          {stats?.refreshHz && ` · ${Math.round(stats.refreshHz)}Hz${stats.vsyncLocked ? " 同步" : ""}`}
         </span>
       </div>
 
       <div
         ref={screenRef}
-        className="relative aspect-[256/240] w-full overflow-hidden rounded-lg border-2 border-muted-foreground/40 bg-black"
+        className="relative flex aspect-[256/240] w-full items-center justify-center overflow-hidden rounded-lg border-2 border-muted-foreground/40 bg-black"
       >
         {message && (
           <div className="absolute inset-x-0 top-3 z-10 mx-auto w-fit rounded-md bg-black/70 px-3 py-1.5 text-sm text-white">
@@ -141,4 +148,32 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
       </dl>
     </div>
   );
+}
+
+/**
+ * Sizes the canvas to the largest whole multiple of the NES resolution, in
+ * device pixels, that fits the container. A fractional scale makes NES pixel
+ * columns alternate between widths (say 4 and 5 device pixels), so a scroll of
+ * one NES pixel per frame moves unevenly on screen and looks like judder.
+ */
+function fitIntegerScale(container: HTMLElement, canvas: HTMLCanvasElement): () => void {
+  const fit = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const { clientWidth, clientHeight } = container;
+    const scale = Math.max(
+      1,
+      Math.floor(Math.min((clientWidth * dpr) / NES_WIDTH, (clientHeight * dpr) / NES_HEIGHT)),
+    );
+    canvas.style.width = `${(NES_WIDTH * scale) / dpr}px`;
+    canvas.style.height = `${(NES_HEIGHT * scale) / dpr}px`;
+  };
+  const observer = new ResizeObserver(fit);
+  observer.observe(container);
+  // Zooming or moving to another monitor changes devicePixelRatio without resizing.
+  window.addEventListener("resize", fit);
+  fit();
+  return () => {
+    observer.disconnect();
+    window.removeEventListener("resize", fit);
+  };
 }

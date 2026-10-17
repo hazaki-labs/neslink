@@ -18,7 +18,17 @@ export type ToWorker =
 export type FromWorker =
   | { type: "ready" }
   | { type: "romLoaded" }
-  | { type: "stats"; fps: number; frame: number }
+  | {
+      type: "stats";
+      fps: number;
+      frame: number;
+      /** Measured display refresh rate, once known. */
+      refreshHz: number | null;
+      /** Whether frames are locked to display refreshes (smooth) or paced by time. */
+      vsyncLocked: boolean;
+      /** Frames in this window held on screen for an irregular number of refreshes (judder). */
+      unevenFrames: number;
+    }
   | { type: "state"; requestId: number; state: Uint8Array<ArrayBuffer> }
   | { type: "error"; message: string };
 

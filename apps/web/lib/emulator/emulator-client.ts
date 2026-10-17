@@ -5,10 +5,12 @@ import {
   type ToWorker,
 } from "@neslink/core";
 
+export type EmulatorStats = Omit<Extract<FromWorker, { type: "stats" }>, "type">;
+
 export interface EmulatorEvents {
   onReady?: () => void;
   onRomLoaded?: () => void;
-  onStats?: (stats: { fps: number; frame: number }) => void;
+  onStats?: (stats: EmulatorStats) => void;
   onError?: (message: string) => void;
 }
 
