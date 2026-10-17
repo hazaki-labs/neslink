@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Gamepad2, Play, Trash2, Upload, Users } from "lucide-react";
+import { Gamepad2, Languages, Play, Trash2, Upload, Users } from "lucide-react";
 import { hashRom, parseRomHeader } from "@neslink/core";
 import { Button } from "@/components/ui/button";
+import { useI18n, type Messages } from "@/i18n";
+import { RoomApiError } from "@/lib/rooms";
 import { deleteRom, listRoms, putRom, type StoredRom } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
@@ -13,14 +15,16 @@ export function RomLibrary({
   /** Create a netplay room for this ROM. */
   onHost: (rom: StoredRom) => Promise<void>;
 }) {
+  const { t, locale, setLocale } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const [roms, setRoms] = useState<StoredRom[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Worded at render time, so switching language rewords it too.
+  const [error, setError] = useState<((t: Messages) => string) | null>(null);
   const [dragging, setDragging] = useState(false);
   const [hosting, setHosting] = useState<string | null>(null);
 
   useEffect(() => {
-    listRoms().then(setRoms, (e: Error) => setError(`无法读取本地游戏库：${e.message}`));
+    listRoms().then(setRoms, (e: Error) => setError(() => (t: Messages) => t.library.loadFailed(e.message)));
   }, []);
 
   const addFiles = async (files: FileList | null) => {
@@ -32,7 +36,7 @@ export function RomLibrary({
       try {
         parseRomHeader(data);
       } catch {
-        setError(`${file.name} 不是有效的 .nes 文件`);
+        setError(() => (t: Messages) => t.library.invalidRom(file.name));
         continue;
       }
       last = {
@@ -55,7 +59,7 @@ export function RomLibrary({
     try {
       await onHost(rom);
     } catch (e) {
-      setError((e as Error).message);
+      setError(() => (t: Messages) => (e instanceof RoomApiError ? t.apiErrors[e.code] : (e as Error).message));
       setHosting(null);
     }
   };
@@ -68,13 +72,22 @@ export function RomLibrary({
   return (
     <div className="flex w-full max-w-3xl flex-col gap-6">
       <header className="flex flex-col gap-1">
-        <h1 className="flex items-center gap-2 text-2xl font-semibold">
-          <Gamepad2 className="size-6" />
-          NESLink
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          载入你自己的 .nes 文件开始游戏。ROM 只保存在这个浏览器里，不会上传。
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="flex items-center gap-2 text-2xl font-semibold">
+            <Gamepad2 className="size-6" />
+            NESLink
+          </h1>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={t.language.label}
+            onClick={() => setLocale(locale === "zh" ? "en" : "zh")}
+          >
+            <Languages data-icon="inline-start" />
+            {t.language.switchTo}
+          </Button>
+        </div>
+        <p className="text-sm text-muted-foreground">{t.library.intro}</p>
       </header>
 
       <button
@@ -96,7 +109,7 @@ export function RomLibrary({
         )}
       >
         <Upload className="size-6" />
-        <span>点击选择或拖入 .nes 文件</span>
+        <span>{t.library.dropHint}</span>
       </button>
       <input
         ref={inputRef}
@@ -110,7 +123,7 @@ export function RomLibrary({
         }}
       />
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error(t)}</p>}
 
       {roms && roms.length > 0 && (
         <ul className="divide-y rounded-xl border">
@@ -124,13 +137,13 @@ export function RomLibrary({
               </div>
               <Button size="sm" onClick={() => onPlay(rom)}>
                 <Play data-icon="inline-start" />
-                开始
+                {t.library.play}
               </Button>
               <Button size="sm" variant="outline" disabled={hosting !== null} onClick={() => host(rom)}>
                 <Users data-icon="inline-start" />
-                {hosting === rom.hash ? "创建中…" : "联机"}
+                {hosting === rom.hash ? t.library.hosting : t.library.host}
               </Button>
-              <Button size="icon-sm" variant="ghost" aria-label={`删除 ${rom.name}`} onClick={() => remove(rom.hash)}>
+              <Button size="icon-sm" variant="ghost" aria-label={t.library.remove(rom.name)} onClick={() => remove(rom.hash)}>
                 <Trash2 />
               </Button>
             </li>

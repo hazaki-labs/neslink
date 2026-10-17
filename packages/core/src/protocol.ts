@@ -1,4 +1,4 @@
-import type { RoomState } from "./netplay/protocol";
+import type { RoomEndReason, RoomErrorCode, RoomState } from "./netplay/protocol";
 
 /** Messages between the UI thread and the emulator worker. */
 
@@ -46,16 +46,17 @@ export type FromWorker =
       netWaits: number;
     }
   | { type: "state"; requestId: number; state: Uint8Array<ArrayBuffer> }
-  | { type: "error"; message: string }
+  /** `kind` says what failed; `message` is the underlying (untranslated) detail. */
+  | { type: "error"; kind: "emulationStopped" | "other"; message: string }
   | { type: "netStatus"; status: NetStatus; reason?: string }
   | { type: "netRoom"; room: RoomState; you: string }
   /** `seat` null: watching. `delay`: input delay in frames for this game. */
   | { type: "netStarted"; seat: number | null; delay: number }
   /** Round trip to the room server in ms. */
   | { type: "netPing"; rttMs: number }
-  | { type: "netEnded"; reason: string }
+  | { type: "netEnded"; reason: RoomEndReason }
   | { type: "netDesync"; frame: number }
-  | { type: "netError"; message: string };
+  | { type: "netError"; code: RoomErrorCode };
 
 /** Messages from the worker to the AudioWorklet. `samples` is mono. */
 export type ToAudio = { type: "samples"; samples: Float32Array<ArrayBuffer> } | { type: "flush" };
