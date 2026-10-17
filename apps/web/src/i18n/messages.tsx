@@ -37,9 +37,13 @@ const zh = {
     spectating: "观战中",
     network: (rtt: number) => `网络 ${rtt}ms`,
     simulated: "（含模拟延迟）",
+    direct: "直连",
+    directRtt: (rtt: number) => `直连 ${rtt}ms`,
+    directConnecting: "正在尝试直连",
+    relayed: "服务器中转",
     inputDelay: (frames: number, frameRate: number) => `输入延迟 ${frames} 帧（${ms(frames, frameRate)}ms）`,
     latencyTitle:
-      "网络：到房间服务器的往返时间。输入延迟：按键到生效之间固定等待的帧数。对方的输入还没到时先按预测继续，到了以后如有出入会回滚重算，所以不用等它。",
+      "网络：到房间服务器的往返时间。输入延迟：按键到生效之间固定等待的帧数。对方的输入还没到时先按预测继续，到了以后如有出入会回滚重算，所以不用等它。直连：和对方之间的 WebRTC 直接连接，不经过服务器；连不上时自动走服务器中转。",
     statsRollbackTitle: (rollbacks: number, frames: number, window: number) =>
       `，回滚 ${rollbacks} 次（重算 ${frames} 帧），最多预测 ${window} 帧`,
     desync: (frame: number) => `检测到画面不同步（第 ${frame} 帧）`,
@@ -144,9 +148,13 @@ const en: Messages = {
     spectating: "Spectating",
     network: (rtt) => `Net ${rtt}ms`,
     simulated: "(simulated lag)",
+    direct: "Direct",
+    directRtt: (rtt) => `Direct ${rtt}ms`,
+    directConnecting: "Connecting directly…",
+    relayed: "Via server",
     inputDelay: (frames, frameRate) => `Input delay ${frames} ${frames === 1 ? "frame" : "frames"} (${ms(frames, frameRate)}ms)`,
     latencyTitle:
-      "Net: round trip to the room server. Input delay: fixed frames between a press and when it takes effect. The other player's input is predicted until it arrives, and corrected by rolling back if it differs, so nobody waits for it.",
+      "Net: round trip to the room server. Input delay: fixed frames between a press and when it takes effect. The other player's input is predicted until it arrives, and corrected by rolling back if it differs, so nobody waits for it. Direct: a WebRTC link straight to the other player, skipping the server; if it can't connect, play goes via the server.",
     statsRollbackTitle: (rollbacks, frames, window) =>
       `, ${rollbacks} rollbacks (${frames} frames re-run), predicting up to ${window} frames`,
     desync: (frame) => `Games went out of sync (frame ${frame})`,

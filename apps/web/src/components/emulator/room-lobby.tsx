@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check, Copy, Crown, Eye, Play } from "lucide-react";
 import {
-  chooseRollbackDelay,
+  chooseNetplayDelay,
   NES_FRAME_RATE,
   NETPLAY_SEATS,
   type NetStatus,
@@ -34,7 +34,7 @@ export function RoomLobby({ status, room, you, notice, onStart, onSeat }: Props)
   const spectators = room?.players.filter((p) => p.seat === null) ?? [];
   const canStart = isHost && seated.length > 0;
   // The same rule the room applies when the game starts.
-  const delay = seated.length > 0 ? chooseRollbackDelay(seated.map((p) => p.rttMs)) : null;
+  const delay = seated.length > 0 ? chooseNetplayDelay(seated) : null;
   const measured = seated.length === 1 || seated.every((p) => p.rttMs !== null);
 
   const copy = async () => {
@@ -75,6 +75,7 @@ export function RoomLobby({ status, room, you, notice, onStart, onSeat }: Props)
                         </span>
                         <span className="ml-auto font-mono text-xs text-white/50 tabular-nums">
                           {player.rttMs !== null ? `${player.rttMs}ms` : t.lobby.measuring}
+                          {player.directRttMs !== null && ` · ${t.player.directRtt(player.directRttMs)}`}
                         </span>
                         {player.id === you && (
                           <Button size="xs" variant="secondary" onClick={() => onSeat(null)}>

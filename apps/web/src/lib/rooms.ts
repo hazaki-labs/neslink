@@ -59,6 +59,11 @@ export function simulatedNetwork(): { lagMs: number; jitterMs: number } | null {
   return { lagMs: Math.min(Math.max(lagMs, 0), 2000), jitterMs: Math.min(Math.max(jitterMs, 0), 1000) };
 }
 
+/** Dev tool: `?p2p=0` keeps play on the server relay, to compare with a direct link. */
+export function directLinkEnabled(): boolean {
+  return new URLSearchParams(location.search).get("p2p") !== "0" && typeof RTCPeerConnection === "function";
+}
+
 const NAME_KEY = "neslink:name";
 
 /** A display name for rooms, remembered per browser. */

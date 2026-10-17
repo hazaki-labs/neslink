@@ -11,7 +11,10 @@ import {
   type ToAudio,
   type ToWorker,
   FramePacer,
+  InputHistory,
   LockstepSession,
+  unpackInputs,
+  type PeerPacket,
   RollbackSession,
   WasmCore,
 } from "@neslink/core";
@@ -47,6 +50,10 @@ let refreshesSinceRender = 0;
 let unevenFrames = 0;
 
 let link: NetplayLink | null = null;
+/** Direct link to the other player through the UI thread (WebRTC), if any. */
+let peerPort: MessagePort | null = null;
+/** Our inputs not yet acknowledged over the direct link. */
+const peerHistory = new InputHistory();
 /** Netplay frames the clock says are due but that could not run yet. */
 let owedFrames = 0;
 let netWaits = 0;
@@ -159,11 +166,34 @@ function tickPlayer(session: RollbackSession, due: number): boolean {
     const mask = localMask();
     const localFrame = session.advance(mask);
     link!.sendInput(localFrame, mask, session.localAdvantage());
+    peerHistory.push(localFrame, mask);
     owedFrames--;
     ran++;
   }
   if (owedFrames > 0) netWaits++;
+  sendPeerPacket(session);
   return ran > 0 || replayed > 0;
+}
+
+/**
+ * Send our unacknowledged inputs over the direct link. Every refresh, even
+ * without a new frame: on a lossy channel the last packet may have been lost.
+ */
+function sendPeerPacket(session: RollbackSession) {
+  if (!peerPort) return;
+  const other = session.activeSeats.find((seat) => seat !== session.localSeat);
+  if (other === undefined) return;
+  const packet = peerHistory.packet(session.localSeat, session.localAdvantage(), session.receivedThrough(other));
+  if (packet) peerPort.postMessage(packet);
+}
+
+/** A packet from the other player over the direct link: same inputs as the server relays, sooner. */
+function onPeerPacket(packet: PeerPacket) {
+  const session = link?.session;
+  if (!(session instanceof RollbackSession) || packet.t !== "in" || packet.s === session.localSeat) return;
+  for (const [f, m] of unpackInputs(packet)) session.receive(packet.s, f, m);
+  if (Number.isInteger(packet.a)) session.receiveAdvantage(packet.a);
+  if (Number.isInteger(packet.k)) peerHistory.acknowledge(packet.k);
 }
 
 /** Run what this refresh owes; returns whether the screen changed. */
@@ -300,6 +330,7 @@ function startGame(game: GameStart): NetSession | null {
   romLoaded = true;
   frame = game.startFrame;
   owedFrames = 0;
+  peerHistory.clear();
 
   let session: NetSession;
   if (game.localSeat === null) {
@@ -330,8 +361,11 @@ function startGame(game: GameStart): NetSession | null {
   return session;
 }
 
-function joinRoom(url: string, name: string, romHash: string, simulated: SimulatedNetwork | null) {
+function joinRoom(url: string, name: string, romHash: string, simulated: SimulatedNetwork | null, port: MessagePort | null) {
   link?.close();
+  peerPort?.close();
+  peerPort = port;
+  if (peerPort) peerPort.onmessage = (event: MessageEvent<PeerPacket>) => onPeerPacket(event.data);
   link = new NetplayLink(url, { name, romHash }, {
     onStatus: (status, reason) => post({ type: "netStatus", status, reason }),
     onRoom: (room, you) => post({ type: "netRoom", room, you }),
@@ -343,6 +377,7 @@ function joinRoom(url: string, name: string, romHash: string, simulated: Simulat
     onDesync: (desyncFrame) => post({ type: "netDesync", frame: desyncFrame }),
     onError: (code) => post({ type: "netError", code }),
     onPing: (rttMs) => post({ type: "netPing", rttMs }),
+    onSignal: (from, data) => post({ type: "netSignal", from, data }),
   }, simulated);
 }
 
@@ -399,10 +434,16 @@ async function handle(message: ToWorker) {
       if (running()) start();
       break;
     case "netJoin":
-      joinRoom(message.url, message.name, message.romHash, message.simulated);
+      joinRoom(message.url, message.name, message.romHash, message.simulated, message.peerPort);
       break;
     case "netStart":
       link?.requestStart();
+      break;
+    case "netSignal":
+      link?.sendSignal(message.to, message.data);
+      break;
+    case "peerRtt":
+      link?.setDirectRtt(message.ms);
       break;
     case "netSeat":
       link?.takeSeat(message.seat);

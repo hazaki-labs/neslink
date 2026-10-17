@@ -27,7 +27,13 @@ export type ToWorker =
       romHash: string;
       /** Dev tool: extra latency to simulate on this player's link. */
       simulated: { lagMs: number; jitterMs: number } | null;
+      /** Port to the UI thread's direct (WebRTC) link to the other player, if any. */
+      peerPort: MessagePort | null;
     }
+  /** Round trip over the direct link, or null when there is none (reported to the room). */
+  | { type: "peerRtt"; ms: number | null }
+  /** WebRTC signaling from the UI thread, for the room to relay to player `to`. */
+  | { type: "netSignal"; to: string; data: unknown }
   /** Host only: ask the room to start. */
   | { type: "netStart" }
   /** Lobby: sit in a seat, or null to spectate. */
@@ -70,7 +76,9 @@ export type FromWorker =
   | { type: "netPing"; rttMs: number }
   | { type: "netEnded"; reason: RoomEndReason }
   | { type: "netDesync"; frame: number }
-  | { type: "netError"; code: RoomErrorCode };
+  | { type: "netError"; code: RoomErrorCode }
+  /** WebRTC signaling relayed by the room from player `from`. */
+  | { type: "netSignal"; from: string; data: unknown };
 
 /** Messages from the worker to the AudioWorklet. `samples` is mono. */
 export type ToAudio = { type: "samples"; samples: Float32Array<ArrayBuffer> } | { type: "flush" };
