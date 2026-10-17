@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Download, Maximize, Pause, Play, RotateCcw, Save } from "lucide-react";
-import { NES_HEIGHT, NES_WIDTH, type NetStatus, type RoomInfo, type RoomState } from "@neslink/core";
+import { NES_FRAME_RATE, NES_HEIGHT, NES_WIDTH, type NetStatus, type RoomInfo, type RoomState } from "@neslink/core";
 import { Button } from "@/components/ui/button";
 import { EmulatorClient, type EmulatorStats, type NetEvent } from "@/lib/emulator/emulator-client";
 import { useControllerInput } from "@/lib/emulator/use-controller-input";
@@ -14,23 +14,40 @@ interface NetView {
   status: NetStatus;
   room: RoomState | null;
   you: string | null;
-  /** Our seat while a game is running, else null (in the lobby). */
+  /** Whether a game is running (we are playing or watching it). */
+  playing: boolean;
+  /** Our seat in the running game, or null when watching it. */
   seat: number | null;
   notice: string | null;
+  /** Round trip to the room server, once measured. */
+  rttMs: number | null;
+  /** Input delay of the running game, in frames. */
+  delayFrames: number | null;
 }
 
-const INITIAL_NET: NetView = { status: "connecting", room: null, you: null, seat: null, notice: null };
+const INITIAL_NET: NetView = {
+  status: "connecting",
+  room: null,
+  you: null,
+  playing: false,
+  seat: null,
+  notice: null,
+  rttMs: null,
+  delayFrames: null,
+};
 
 function applyNetEvent(view: NetView, event: NetEvent): NetView {
   switch (event.type) {
     case "netStatus":
-      return { ...view, status: event.status, seat: event.status === "closed" ? null : view.seat };
+      return event.status === "closed" ? { ...view, status: event.status, playing: false, seat: null } : { ...view, status: event.status };
     case "netRoom":
       return { ...view, room: event.room, you: event.you };
     case "netStarted":
-      return { ...view, seat: event.seat, notice: null };
+      return { ...view, playing: true, seat: event.seat, delayFrames: event.delay, notice: null };
+    case "netPing":
+      return { ...view, rttMs: event.rttMs };
     case "netEnded":
-      return { ...view, seat: null, notice: event.reason };
+      return { ...view, playing: false, seat: null, notice: event.reason };
     default:
       return view;
   }
@@ -130,7 +147,17 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         {roomId && (
           <span className="text-sm text-muted-foreground">
             房间 <span className="font-mono">{roomId}</span>
-            {net.seat !== null && ` · 你是 ${net.seat + 1}P`}
+            {net.playing && (net.seat !== null ? ` · 你是 ${net.seat + 1}P` : " · 观战中")}
+          </span>
+        )}
+        {roomId && net.rttMs !== null && (
+          <span
+            className="font-mono text-xs text-muted-foreground tabular-nums"
+            title="网络：到房间服务器的往返时间。输入延迟：按键到生效之间固定等待的帧数，用来等对方的输入到达。"
+          >
+            网络 {Math.round(net.rttMs)}ms
+            {net.playing && net.seat !== null && net.delayFrames !== null &&
+              ` · 输入延迟 ${net.delayFrames} 帧（${Math.round((net.delayFrames * 1000) / NES_FRAME_RATE)}ms）`}
           </span>
         )}
         <span
@@ -151,13 +178,14 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         ref={screenRef}
         className="relative flex aspect-[256/240] w-full items-center justify-center overflow-hidden rounded-lg border-2 border-muted-foreground/40 bg-black"
       >
-        {roomId && net.seat === null && (
+        {roomId && !net.playing && (
           <RoomLobby
             status={net.status}
             room={net.room}
             you={net.you}
             notice={net.notice}
             onStart={() => client?.startRoom()}
+            onSeat={(seat) => client?.takeSeat(seat)}
           />
         )}
         {message && (

@@ -75,6 +75,11 @@ export class EmulatorClient {
     this.send({ type: "netStart" });
   }
 
+  /** Sit in `seat`, or stand up to spectate with null. */
+  takeSeat(seat: number | null): void {
+    this.send({ type: "netSeat", seat });
+  }
+
   leaveRoom(): void {
     this.send({ type: "netLeave" });
   }
