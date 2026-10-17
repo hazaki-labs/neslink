@@ -47,6 +47,18 @@ export function setRoomInUrl(id: string | null): void {
   history.pushState(null, "", url);
 }
 
+/**
+ * Dev tool: `?lag=120&jitter=20` adds that much round-trip latency (and random
+ * jitter) to this tab's room connection, to try rollback without a far-away friend.
+ */
+export function simulatedNetwork(): { lagMs: number; jitterMs: number } | null {
+  const params = new URLSearchParams(location.search);
+  const lagMs = Number(params.get("lag") ?? 0);
+  const jitterMs = Number(params.get("jitter") ?? 0);
+  if (!(lagMs > 0 || jitterMs > 0)) return null;
+  return { lagMs: Math.min(Math.max(lagMs, 0), 2000), jitterMs: Math.min(Math.max(jitterMs, 0), 1000) };
+}
+
 const NAME_KEY = "neslink:name";
 
 /** A display name for rooms, remembered per browser. */

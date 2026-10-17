@@ -15,7 +15,7 @@ import {
   RollbackSession,
   WasmCore,
 } from "@neslink/core";
-import { NetplayLink, type GameStart, type NetSession } from "./netplay-link";
+import { NetplayLink, type GameStart, type NetSession, type SimulatedNetwork } from "./netplay-link";
 
 const FRAME_MS = 1000 / NES_FRAME_RATE;
 
@@ -61,12 +61,25 @@ const SPECTATOR_SLACK = 2;
 const CATCH_UP_FRAMES = 30;
 /**
  * Emulation time one rollback may take. The window of speculative frames is
- * sized so a worst-case re-simulation fits, measured on this device.
+ * sized so a worst-case re-simulation fits, measured on this device. A long
+ * re-simulation costs one late frame; a window too small to cover the network
+ * trip makes the game stop and wait instead, which is worse, so lean generous.
  */
-const ROLLBACK_BUDGET_MS = 5;
-const MIN_ROLLBACK_WINDOW = 3;
+const ROLLBACK_BUDGET_MS = 12;
+const MIN_ROLLBACK_WINDOW = 4;
 /** Smoothed cost of emulating one frame, in ms. */
 let frameCostMs = 1;
+/**
+ * rAF can stop without the page reporting itself hidden (a background tab in
+ * some embedders, an occluded window). Alone that only pauses the game, but in
+ * netplay it freezes the other player too, so a watchdog falls back to a timer
+ * and returns to rAF once it fires again.
+ */
+const RAF_STALL_MS = 100;
+const WATCHDOG_MS = 100;
+let watchdog: ReturnType<typeof setInterval> | null = null;
+let lastTickAt = 0;
+let lastRafAt = 0;
 
 function post(message: FromWorker, transfer: Transferable[] = []) {
   scope.postMessage(message, transfer);
@@ -163,6 +176,7 @@ function runDue(due: number): boolean {
 }
 
 function tick(now: number) {
+  lastTickAt = performance.now();
   scheduled = null;
   if (!running()) return;
   schedule();
@@ -210,6 +224,7 @@ function tick(now: number) {
       netWaits,
       ...rollbackStats,
       rollbackWindow: rollback?.window ?? null,
+      frameCostMs,
     });
     fpsWindowStart = now;
     fpsFrames = 0;
@@ -233,18 +248,45 @@ function cancel() {
 }
 
 function start() {
-  cancel();
   // rAF stops while the page is hidden. Alone that just pauses the game, but in
   // netplay it would freeze the other player too, so keep going on a timer.
-  usingTimer = !hasRaf || (hidden && inNetGame());
-  pacer = usingTimer ? timerPacer : rafPacer;
-  pacer.reset();
+  setPacing(!hasRaf || (hidden && inNetGame()));
   fpsWindowStart = null;
   fpsFrames = 0;
   refreshesSinceRender = 0;
   unevenFrames = 0;
   postAudio({ type: "flush" });
+  lastTickAt = performance.now();
+  if (inNetGame() && hasRaf && watchdog === null) watchdog = setInterval(watchRaf, WATCHDOG_MS);
+}
+
+function setPacing(timer: boolean) {
+  cancel();
+  usingTimer = timer;
+  pacer = timer ? timerPacer : rafPacer;
+  pacer.reset();
   schedule();
+}
+
+function watchRaf() {
+  if (!inNetGame()) {
+    clearInterval(watchdog!);
+    watchdog = null;
+    return;
+  }
+  if (!running()) return;
+  const now = performance.now();
+  if (!usingTimer) {
+    if (now - lastTickAt > RAF_STALL_MS) setPacing(true);
+    return;
+  }
+  if (hidden) return;
+  // On the timer: probe rAF and go back to it (smoother, vsync-locked) once it runs again.
+  if (now - lastRafAt < WATCHDOG_MS * 1.5) setPacing(false);
+  else
+    scope.requestAnimationFrame(() => {
+      lastRafAt = performance.now();
+    });
 }
 
 /** Build the session for a game: rollback for a seated player, lockstep for a spectator. */
@@ -288,7 +330,7 @@ function startGame(game: GameStart): NetSession | null {
   return session;
 }
 
-function joinRoom(url: string, name: string, romHash: string) {
+function joinRoom(url: string, name: string, romHash: string, simulated: SimulatedNetwork | null) {
   link?.close();
   link = new NetplayLink(url, { name, romHash }, {
     onStatus: (status, reason) => post({ type: "netStatus", status, reason }),
@@ -301,7 +343,7 @@ function joinRoom(url: string, name: string, romHash: string) {
     onDesync: (desyncFrame) => post({ type: "netDesync", frame: desyncFrame }),
     onError: (code) => post({ type: "netError", code }),
     onPing: (rttMs) => post({ type: "netPing", rttMs }),
-  });
+  }, simulated);
 }
 
 async function handle(message: ToWorker) {
@@ -357,7 +399,7 @@ async function handle(message: ToWorker) {
       if (running()) start();
       break;
     case "netJoin":
-      joinRoom(message.url, message.name, message.romHash);
+      joinRoom(message.url, message.name, message.romHash, message.simulated);
       break;
     case "netStart":
       link?.requestStart();

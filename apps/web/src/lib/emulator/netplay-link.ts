@@ -42,6 +42,14 @@ export interface NetplayEvents {
   onPing(rttMs: number): void;
 }
 
+/** Extra latency to simulate on this link (dev tool, from `?lag=` / `?jitter=`). */
+export interface SimulatedNetwork {
+  /** Added round trip, split evenly between the two directions. */
+  lagMs: number;
+  /** Up to this much more per message, at random (order is kept, as on a real socket). */
+  jitterMs: number;
+}
+
 const PING_INTERVAL_MS = 1000;
 const PING_SAMPLES = 5;
 
@@ -55,8 +63,15 @@ export class NetplayLink {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private pingSentAt: number | null = null;
   private readonly rtts: number[] = [];
+  private sendAt = 0;
+  private receiveAt = 0;
 
-  constructor(url: string, hello: { name: string; romHash: string }, private readonly events: NetplayEvents) {
+  constructor(
+    url: string,
+    hello: { name: string; romHash: string },
+    private readonly events: NetplayEvents,
+    private readonly simulated: SimulatedNetwork | null = null,
+  ) {
     events.onStatus("connecting");
     this.ws = new WebSocket(url);
     this.ws.onopen = () => {
@@ -65,10 +80,12 @@ export class NetplayLink {
       this.ping();
       this.pingTimer = setInterval(() => this.ping(), PING_INTERVAL_MS);
     };
-    this.ws.onmessage = (event) => {
-      if (event.data === NETPLAY_PONG) return this.onPong();
-      this.onMessage(JSON.parse(event.data as string) as ServerMessage);
-    };
+    this.ws.onmessage = (event) =>
+      this.later("receive", () => {
+        if (this.closed && event.data !== NETPLAY_PONG) return;
+        if (event.data === NETPLAY_PONG) return this.onPong();
+        this.onMessage(JSON.parse(event.data as string) as ServerMessage);
+      });
     this.ws.onclose = (event) => {
       this.stopPinging();
       if (this.closed) return;
@@ -113,7 +130,7 @@ export class NetplayLink {
     // One probe in flight at a time; a lost one is simply replaced next interval.
     if (this.ws.readyState !== WebSocket.OPEN) return;
     this.pingSentAt = performance.now();
-    this.ws.send(NETPLAY_PING);
+    this.raw(NETPLAY_PING);
   }
 
   private onPong() {
@@ -181,6 +198,24 @@ export class NetplayLink {
   }
 
   private send(message: ClientMessage) {
-    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message));
+    this.raw(JSON.stringify(message));
+  }
+
+  private raw(data: string) {
+    this.later("send", () => {
+      if (this.ws.readyState === WebSocket.OPEN) this.ws.send(data);
+    });
+  }
+
+  /** Run `fn` now, or after the simulated one-way delay, never overtaking earlier messages. */
+  private later(direction: "send" | "receive", fn: () => void) {
+    if (!this.simulated) return fn();
+    const now = performance.now();
+    const delay = this.simulated.lagMs / 2 + Math.random() * this.simulated.jitterMs;
+    const last = direction === "send" ? this.sendAt : this.receiveAt;
+    const at = Math.max(last, now + delay);
+    if (direction === "send") this.sendAt = at;
+    else this.receiveAt = at;
+    setTimeout(fn, at - now);
   }
 }
