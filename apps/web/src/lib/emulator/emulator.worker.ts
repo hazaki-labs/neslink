@@ -6,13 +6,16 @@ import {
   NES_WIDTH,
   NETPLAY_HASH_INTERVAL,
   NETPLAY_SNAPSHOT_INTERVAL,
+  MAX_ROLLBACK,
   type FromWorker,
   type ToAudio,
   type ToWorker,
   FramePacer,
+  LockstepSession,
+  RollbackSession,
   WasmCore,
 } from "@neslink/core";
-import { NetplayLink } from "./netplay-link";
+import { NetplayLink, type GameStart, type NetSession } from "./netplay-link";
 
 const FRAME_MS = 1000 / NES_FRAME_RATE;
 
@@ -44,9 +47,11 @@ let refreshesSinceRender = 0;
 let unevenFrames = 0;
 
 let link: NetplayLink | null = null;
-/** Netplay frames the clock says are due but that are still waiting on remote input. */
+/** Netplay frames the clock says are due but that could not run yet. */
 let owedFrames = 0;
 let netWaits = 0;
+/** Most owed frames made up at once, so a long wait does not turn into a fast-forward. */
+const MAX_OWED = 4;
 /**
  * A spectator further than this behind the newest input it holds is catching
  * up (joined mid-game, or the tab was busy) and fast-forwards.
@@ -54,6 +59,14 @@ let netWaits = 0;
 const SPECTATOR_SLACK = 2;
 /** Frames a catching-up spectator runs per refresh: ~25ms of emulation. */
 const CATCH_UP_FRAMES = 30;
+/**
+ * Emulation time one rollback may take. The window of speculative frames is
+ * sized so a worst-case re-simulation fits, measured on this device.
+ */
+const ROLLBACK_BUDGET_MS = 5;
+const MIN_ROLLBACK_WINDOW = 3;
+/** Smoothed cost of emulating one frame, in ms. */
+let frameCostMs = 1;
 
 function post(message: FromWorker, transfer: Transferable[] = []) {
   scope.postMessage(message, transfer);
@@ -73,35 +86,80 @@ function running() {
   return link === null || inNetGame();
 }
 
-function step(frameInputs: readonly number[], audio = true) {
+/**
+ * Run one frame. `live` frames are shown and heard; re-simulated (rollback)
+ * and fast-forwarded frames are silent and not counted as displayed frames.
+ */
+function step(frameInputs: readonly number[], live = true) {
+  const t0 = performance.now();
   core!.runFrame(frameInputs);
+  frameCostMs += (performance.now() - t0 - frameCostMs) * 0.05;
+  if (!live) {
+    core!.discardAudio();
+    return;
+  }
   frame++;
   fpsFrames++;
   const samples = core!.drainAudio();
-  // Fast-forwarded frames would arrive as a burst of sound; drop it.
-  if (audio && samples.length > 0) postAudio({ type: "samples", samples }, [samples.buffer]);
+  if (samples.length > 0) postAudio({ type: "samples", samples }, [samples.buffer]);
 }
 
-function stepNetplay(audio = true) {
-  const session = link!.session!;
-  // Either keyboard layout drives the local seat; the seat itself comes from the room.
-  const local = inputs[0] | inputs[1];
-  const { inputs: frameInputs, localFrame } = session.advance(local);
-  if (localFrame !== null) link!.sendInput(localFrame, local);
-  step(frameInputs, audio);
-  if (session.spectating) return;
-  if (session.frame % NETPLAY_HASH_INTERVAL === 0) {
-    link!.sendHash(session.frame - 1, core!.stateHash());
-  }
-  // The first seat keeps the room's snapshot fresh for spectators who join late.
-  if (session.localSeat === session.activeSeats[0] && session.frame % NETPLAY_SNAPSHOT_INTERVAL === 0) {
-    link!.sendSnapshot(session.frame, toBase64(core!.saveState()));
-  }
+/** Either keyboard layout or gamepad drives the local seat; the seat itself comes from the room. */
+function localMask() {
+  return inputs[0] | inputs[1];
 }
 
 function render() {
   image!.data.set(core!.framebuffer());
   ctx!.putImageData(image!, 0, 0);
+}
+
+/** A spectator follows the confirmed inputs; returns frames shown this refresh. */
+function tickSpectator(session: LockstepSession, due: number): number {
+  let ran = 0;
+  const backlog = session.available(CATCH_UP_FRAMES + session.delay + SPECTATOR_SLACK);
+  if (backlog > session.delay + SPECTATOR_SLACK) {
+    // Behind the game: run ahead silently until close to live.
+    const n = Math.min(CATCH_UP_FRAMES, backlog - session.delay);
+    for (; ran < n; ran++) step(session.advance().inputs, ran === n - 1);
+    owedFrames = 0;
+    return ran;
+  }
+  owedFrames = Math.min(owedFrames + due, MAX_OWED);
+  while (owedFrames > 0 && session.ready()) {
+    step(session.advance().inputs);
+    owedFrames--;
+    ran++;
+  }
+  if (owedFrames > 0) netWaits++;
+  return ran;
+}
+
+/** A seated player runs on predictions and corrects them; returns whether the screen changed. */
+function tickPlayer(session: RollbackSession, due: number): boolean {
+  owedFrames = Math.min(owedFrames + due, MAX_OWED);
+  // Running ahead of the other player only makes them roll back more; ease off now and then.
+  if (owedFrames > 0 && session.shouldYield()) owedFrames--;
+  const replayed = session.resolve();
+  let ran = 0;
+  while (owedFrames > 0 && session.canAdvance()) {
+    const mask = localMask();
+    const localFrame = session.advance(mask);
+    link!.sendInput(localFrame, mask, session.localAdvantage());
+    owedFrames--;
+    ran++;
+  }
+  if (owedFrames > 0) netWaits++;
+  return ran > 0 || replayed > 0;
+}
+
+/** Run what this refresh owes; returns whether the screen changed. */
+function runDue(due: number): boolean {
+  const session = link?.session;
+  if (session instanceof RollbackSession) return tickPlayer(session, due);
+  if (session instanceof LockstepSession) return tickSpectator(session, due) > 0;
+  for (let i = 0; i < due; i++) step(inputs);
+  return due > 0;
 }
 
 function tick(now: number) {
@@ -110,29 +168,9 @@ function tick(now: number) {
   schedule();
 
   const due = pacer.advance(now);
-  let ran = 0;
+  let changed: boolean;
   try {
-    if (inNetGame()) {
-      const session = link!.session!;
-      const backlog = session.spectating ? session.available(CATCH_UP_FRAMES + session.delay + SPECTATOR_SLACK) : 0;
-      if (backlog > session.delay + SPECTATOR_SLACK) {
-        // Spectator behind the game: run ahead silently until close to live.
-        for (const n = Math.min(CATCH_UP_FRAMES, backlog - session.delay); ran < n; ran++) stepNetplay(false);
-        owedFrames = 0;
-      } else {
-        // Frames we could not run while waiting are made up once input arrives, but
-        // only a few, so a long wait does not turn into a fast-forward.
-        owedFrames = Math.min(owedFrames + due, session.delay);
-        while (owedFrames > 0 && session.ready()) {
-          stepNetplay();
-          owedFrames--;
-          ran++;
-        }
-        if (owedFrames > 0) netWaits++;
-      }
-    } else {
-      for (; ran < due; ran++) step(inputs);
-    }
+    changed = runDue(due);
   } catch (error) {
     romLoaded = false;
     post({ type: "error", kind: "emulationStopped", message: errorMessage(error) });
@@ -140,7 +178,8 @@ function tick(now: number) {
   }
 
   refreshesSinceRender++;
-  if (ran === 0) return;
+  if (!changed) return;
+  // However many frames ran or were corrected, only the newest is drawn.
   render();
   const n = pacer.lockedInterval();
   if (n !== null && refreshesSinceRender !== n) unevenFrames++;
@@ -154,6 +193,13 @@ function tick(now: number) {
     fpsFrames = 0;
   } else if (now - fpsWindowStart >= 1000) {
     const refreshMs = pacer.refreshMs();
+    const session = link?.session;
+    const rollback = session instanceof RollbackSession ? session : null;
+    // Size the rollback window to what this device can re-simulate within budget.
+    if (rollback) {
+      rollback.window = Math.max(MIN_ROLLBACK_WINDOW, Math.min(MAX_ROLLBACK, Math.floor(ROLLBACK_BUDGET_MS / frameCostMs)));
+    }
+    const rollbackStats = rollback?.takeStats() ?? { rollbacks: 0, replayedFrames: 0 };
     post({
       type: "stats",
       fps: (fpsFrames * 1000) / (now - fpsWindowStart),
@@ -162,6 +208,8 @@ function tick(now: number) {
       vsyncLocked: pacer.lockedInterval() !== null,
       unevenFrames,
       netWaits,
+      ...rollbackStats,
+      rollbackWindow: rollback?.window ?? null,
     });
     fpsWindowStart = now;
     fpsFrames = 0;
@@ -199,23 +247,53 @@ function start() {
   schedule();
 }
 
+/** Build the session for a game: rollback for a seated player, lockstep for a spectator. */
+function startGame(game: GameStart): NetSession | null {
+  if (!core || !rom) return null;
+  const emulator = core;
+  // Every player powers on the same cartridge, so all cores start identical;
+  // a late spectator then jumps to the room's latest snapshot.
+  emulator.loadRom(rom);
+  if (game.snapshot) emulator.loadState(fromBase64(game.snapshot));
+  romLoaded = true;
+  frame = game.startFrame;
+  owedFrames = 0;
+
+  let session: NetSession;
+  if (game.localSeat === null) {
+    session = new LockstepSession(game.seats, null, game.delay, game.startFrame);
+  } else {
+    const rollback = new RollbackSession(game.seats, game.localSeat, game.delay, {
+      save: (slot) => emulator.saveSlot(slot),
+      load: (slot) => emulator.loadSlot(slot),
+      run: (frameInputs, replay) => step(frameInputs, !replay),
+      hash: () => emulator.stateHash(),
+    });
+    const uploadsSnapshots = game.localSeat === game.seats[0];
+    rollback.onFinal = (final, hash) => {
+      const next = final + 1;
+      if (next % NETPLAY_HASH_INTERVAL === 0) link!.sendHash(final, hash);
+      // The first seat keeps the room's snapshot fresh for spectators who join late.
+      if (uploadsSnapshots && next % NETPLAY_SNAPSHOT_INTERVAL === 0) {
+        const slot = rollback.slotBefore(next);
+        const bytes = slot === null ? emulator.saveState() : emulator.slotBytes(slot);
+        link!.sendSnapshot(next, toBase64(bytes));
+      }
+    };
+    session = rollback;
+  }
+  post({ type: "netStarted", seat: game.localSeat, delay: game.delay });
+  // Start on the next turn: the link attaches the session to receive inputs first.
+  queueMicrotask(start);
+  return session;
+}
+
 function joinRoom(url: string, name: string, romHash: string) {
   link?.close();
   link = new NetplayLink(url, { name, romHash }, {
     onStatus: (status, reason) => post({ type: "netStatus", status, reason }),
     onRoom: (room, you) => post({ type: "netRoom", room, you }),
-    onStart: (session, snapshot) => {
-      if (!core || !rom) return;
-      // Every player powers on the same cartridge, so all cores start identical;
-      // a late spectator then jumps to the room's latest snapshot.
-      core.loadRom(rom);
-      if (snapshot) core.loadState(fromBase64(snapshot));
-      romLoaded = true;
-      frame = session.frame;
-      owedFrames = 0;
-      post({ type: "netStarted", seat: session.localSeat, delay: session.delay });
-      start();
-    },
+    onStart: startGame,
     onEnd: (reason) => {
       cancel();
       post({ type: "netEnded", reason });

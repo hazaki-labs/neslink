@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  chooseInputDelay,
+  chooseRollbackDelay,
   NETPLAY_PING,
   NETPLAY_PONG,
   NETPLAY_SEATS,
@@ -114,7 +114,8 @@ export class Room extends DurableObject<Env> {
       case "input":
         if (this.playing(me) && isFrame(message.f) && isMask(message.m)) {
           this.logInput(me.seat, message.f, message.m);
-          this.broadcast({ t: "input", s: me.seat, f: message.f, m: message.m }, ws);
+          const a = Number.isInteger(message.a) ? message.a : undefined;
+          this.broadcast({ t: "input", s: me.seat, f: message.f, m: message.m, a }, ws);
         }
         break;
       case "hash":
@@ -216,8 +217,9 @@ export class Room extends DurableObject<Env> {
     if (this.started) return;
     const seated = this.players().filter((p) => p.seat !== null);
     if (seated.length === 0) return this.send(ws, { t: "error", code: "noPlayers" });
-    // Just enough delay for an input to cross between the players, measured now.
-    const delay = chooseInputDelay(seated.map((p) => p.rttMs));
+    // Players roll back, so a small delay (from latency measured now) is enough;
+    // prediction covers the rest of the trip.
+    const delay = chooseRollbackDelay(seated.map((p) => p.rttMs));
     const seats = seated.map((p) => p.seat!).sort((a, b) => a - b);
     this.game = { delay, seats, snapshot: null, log: [] };
     this.started = true;

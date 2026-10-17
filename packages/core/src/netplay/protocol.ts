@@ -70,7 +70,8 @@ export type ClientMessage =
   /** Host only: begin the game with whoever is seated (at least one). */
   | { t: "start" }
   /** Local input `m` for frame `f`. */
-  | { t: "input"; f: number; m: number }
+  /** `a`: the sender's frame advantage, for rollback time sync. */
+  | { t: "input"; f: number; m: number; a?: number }
   /** State hash `h` after running frame `f`. */
   | { t: "hash"; f: number; h: number }
   /** This player's measured round trip to the room, for choosing the input delay. */
@@ -94,6 +95,6 @@ export type ServerMessage =
       from?: { f: number; s: string };
       inputs?: [seat: number, frame: number, mask: number][];
     }
-  | { t: "input"; s: number; f: number; m: number }
+  | { t: "input"; s: number; f: number; m: number; a?: number }
   | { t: "desync"; f: number }
   | { t: "error"; code: RoomErrorCode };

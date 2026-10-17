@@ -1,23 +1,39 @@
 import {
-  LockstepSession,
+  type LockstepSession,
   NETPLAY_PING,
   NETPLAY_PONG,
   type ClientMessage,
   type NetStatus,
   type RoomEndReason,
   type RoomErrorCode,
+  type RollbackSession,
   type RoomState,
   type ServerMessage,
 } from "@neslink/core";
+
+/** A seated player rolls back; a spectator follows confirmed inputs in lockstep. */
+export type NetSession = RollbackSession | LockstepSession;
+
+export interface GameStart {
+  seats: number[];
+  /** Our seat in this game, or null to watch it. */
+  localSeat: number | null;
+  delay: number;
+  /** Frame to start from: 0 (power-on) or a snapshot's frame. */
+  startFrame: number;
+  /** Base64 save state for a late spectator, else null. */
+  snapshot: string | null;
+}
 
 export interface NetplayEvents {
   onStatus(status: NetStatus, reason?: string): void;
   onRoom(room: RoomState, you: string): void;
   /**
-   * A game started (or is in progress, for a late spectator): run with this
-   * session, from power-on, or from `snapshot` (base64 save state) if given.
+   * A game started (or is in progress, for a late spectator). The handler
+   * builds the session that will run it and returns it; the link then feeds
+   * it every input that arrives.
    */
-  onStart(session: LockstepSession, snapshot: string | null): void;
+  onStart(start: GameStart): NetSession | null;
   /** A game in progress ended (a player left, or the connection dropped). */
   onEnd(reason: RoomEndReason): void;
   onDesync(frame: number): void;
@@ -29,9 +45,9 @@ export interface NetplayEvents {
 const PING_INTERVAL_MS = 1000;
 const PING_SAMPLES = 5;
 
-/** One player's connection to a room: the socket plus the lockstep session once started. */
+/** One player's connection to a room: the socket plus the game session once started. */
 export class NetplayLink {
-  session: LockstepSession | null = null;
+  session: NetSession | null = null;
   private readonly ws: WebSocket;
   private you: string | null = null;
   private room: RoomState | null = null;
@@ -78,8 +94,8 @@ export class NetplayLink {
     this.send({ t: "snapshot", f: frame, s: state });
   }
 
-  sendInput(frame: number, mask: number): void {
-    this.send({ t: "input", f: frame, m: mask });
+  sendInput(frame: number, mask: number, advantage?: number): void {
+    this.send({ t: "input", f: frame, m: mask, a: advantage });
   }
 
   sendHash(frame: number, hash: number): void {
@@ -129,14 +145,22 @@ export class NetplayLink {
       case "start": {
         const seat = this.room?.players.find((p) => p.id === this.you)?.seat ?? null;
         // Not seated in this game means watching it.
-        const local = seat !== null && message.seats.includes(seat) ? seat : null;
-        this.session = new LockstepSession(message.seats, local, message.delay, message.from?.f ?? 0);
-        for (const [s, f, m] of message.inputs ?? []) this.session.receive(s, f, m);
-        this.events.onStart(this.session, message.from?.s ?? null);
+        const localSeat = seat !== null && message.seats.includes(seat) ? seat : null;
+        this.session = this.events.onStart({
+          seats: message.seats,
+          localSeat,
+          delay: message.delay,
+          startFrame: message.from?.f ?? 0,
+          snapshot: message.from?.s ?? null,
+        });
+        for (const [s, f, m] of message.inputs ?? []) this.session?.receive(s, f, m);
         break;
       }
       case "input":
         this.session?.receive(message.s, message.f, message.m);
+        if (message.a !== undefined && this.session && !this.session.spectating) {
+          (this.session as RollbackSession).receiveAdvantage(message.a);
+        }
         break;
       case "desync":
         this.events.onDesync(message.f);

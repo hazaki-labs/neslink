@@ -191,7 +191,11 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
           className="font-mono text-xs text-muted-foreground tabular-nums"
           title={
             stats
-              ? t.player.statsTitle(stats.unevenFrames) + (roomId ? t.player.statsNetTitle(stats.netWaits) : "")
+              ? t.player.statsTitle(stats.unevenFrames) +
+                (roomId ? t.player.statsNetTitle(stats.netWaits) : "") +
+                (stats.rollbackWindow !== null
+                  ? t.player.statsRollbackTitle(stats.rollbacks, stats.replayedFrames, stats.rollbackWindow)
+                  : "")
               : undefined
           }
         >
