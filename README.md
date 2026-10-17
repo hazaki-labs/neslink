@@ -5,13 +5,15 @@ A platform for playing NES games in the browser, built toward multiplayer netpla
 Current milestone: **M1 netplay (lockstep) + spectating**.
 
 - **Single player**: load a local `.nes` file and play, with quick save/load. ROMs and saves live only in the browser's IndexedDB and are never uploaded.
-- **Netplay**: click **联机** (Netplay) on a game in the library to create a room, then share the room link. Everyone who joins loads their own copy of the same ROM (checked by SHA-1). The host takes 1P automatically; others join as spectators and can click **坐下** (Sit) to take a free seat. The host can start once at least one person is seated (in a solo game everyone else watches). Seated players run from power-on in lockstep, exchanging only their controller input for each frame. The input delay is picked from the players' measured latency (1–8 frames), and a work-RAM hash is compared every 60 frames to detect desyncs.
+- **Netplay**: click **Netplay** on a game in the library to create a room, then share the room link. Everyone who joins loads their own copy of the same ROM (checked by SHA-1). The host takes 1P automatically; others join as spectators and can click **Sit** to take a free seat. The host can start once at least one person is seated (in a solo game everyone else watches). Seated players run from power-on in lockstep, exchanging only their controller input for each frame. The input delay is picked from the players' measured latency (1–8 frames), and a work-RAM hash is compared every 60 frames to detect desyncs.
+- **Languages**: the UI is in English and Chinese. It follows the browser language on the first visit, and can be switched (and is remembered) from the library page.
 - **Spectating**: anyone with the link can watch, even mid-game. The lowest-seated player uploads a save-state snapshot to the room every 600 frames (~10 s); a spectator joining mid-game starts from the latest snapshot and fast-forwards (muted) to live.
 
 ## Layout
 
 ```
-apps/web           Vite + React frontend (library, player, room lobby); builds to static files
+apps/web           Vite + React frontend (library, player, room lobby); builds to static files.
+                   UI copy lives in typed dictionaries in apps/web/src/i18n/messages.tsx
 apps/server        Cloudflare Worker: serves the built frontend and /api; one Durable Object per room
                    handles seating, relays inputs and compares hashes
 packages/core      Emulator core interface, WASM core adapter, input mapping, frame pacing,
