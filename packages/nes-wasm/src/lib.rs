@@ -142,6 +142,17 @@ impl Nes {
         Ok(())
     }
 
+    /// Address and length of rollback slot `slot`, to copy out (e.g. as a spectator snapshot).
+    #[wasm_bindgen(js_name = slotPtr)]
+    pub fn slot_ptr(&self, slot: usize) -> *const u8 {
+        self.slots.get(slot).map_or(std::ptr::null(), |buf| buf.as_ptr())
+    }
+
+    #[wasm_bindgen(js_name = slotLen)]
+    pub fn slot_len(&self, slot: usize) -> usize {
+        self.slots.get(slot).map_or(0, Vec::len)
+    }
+
     #[wasm_bindgen(js_name = loadState)]
     pub fn load_state(&mut self, state: &[u8]) -> Result<(), JsError> {
         self.deck.deserialize_state(state)?;

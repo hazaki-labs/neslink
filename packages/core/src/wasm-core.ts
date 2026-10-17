@@ -48,6 +48,25 @@ export class WasmCore implements EmulatorCore {
     return new Uint8ClampedArray(this.memory.buffer as ArrayBuffer, this.nes.framePtr(), FRAME_BYTES);
   }
 
+  /** Save into a rollback slot kept inside wasm (no copy). */
+  saveSlot(slot: number): void {
+    this.nes.saveSlot(slot);
+  }
+
+  loadSlot(slot: number): void {
+    this.nes.loadSlot(slot);
+  }
+
+  /** Copy of a rollback slot, e.g. to send as a spectator snapshot. */
+  slotBytes(slot: number): Uint8Array {
+    return new Uint8Array(this.memory.buffer, this.nes.slotPtr(slot), this.nes.slotLen(slot)).slice();
+  }
+
+  /** Drop pending audio without copying it out (re-simulated frames). */
+  discardAudio(): void {
+    this.nes.drainAudio();
+  }
+
   stateHash(): number {
     return this.nes.wramHash();
   }

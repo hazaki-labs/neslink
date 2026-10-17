@@ -44,6 +44,11 @@ export type FromWorker =
       unevenFrames: number;
       /** Netplay: refreshes in this window spent waiting for the other player's input. */
       netWaits: number;
+      /** Netplay rollback: corrections and frames re-simulated in this window. */
+      rollbacks: number;
+      replayedFrames: number;
+      /** Netplay rollback: frames we may run ahead of the other player, sized to this device. */
+      rollbackWindow: number | null;
     }
   | { type: "state"; requestId: number; state: Uint8Array<ArrayBuffer> }
   /** `kind` says what failed; `message` is the underlying (untranslated) detail. */

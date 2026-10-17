@@ -116,6 +116,23 @@ export class Nes {
         return ret[0] >>> 0;
     }
     /**
+     * @param {number} slot
+     * @returns {number}
+     */
+    slotLen(slot) {
+        const ret = wasm.nes_slotLen(this.__wbg_ptr, slot);
+        return ret >>> 0;
+    }
+    /**
+     * Address and length of rollback slot `slot`, to copy out (e.g. as a spectator snapshot).
+     * @param {number} slot
+     * @returns {number}
+     */
+    slotPtr(slot) {
+        const ret = wasm.nes_slotPtr(this.__wbg_ptr, slot);
+        return ret >>> 0;
+    }
+    /**
      * @returns {number}
      */
     statePtr() {

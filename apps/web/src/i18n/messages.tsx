@@ -37,7 +37,10 @@ const zh = {
     spectating: "观战中",
     network: (rtt: number) => `网络 ${rtt}ms`,
     inputDelay: (frames: number, frameRate: number) => `输入延迟 ${frames} 帧（${ms(frames, frameRate)}ms）`,
-    latencyTitle: "网络：到房间服务器的往返时间。输入延迟：按键到生效之间固定等待的帧数，用来等对方的输入到达。",
+    latencyTitle:
+      "网络：到房间服务器的往返时间。输入延迟：按键到生效之间固定等待的帧数。对方的输入还没到时先按预测继续，到了以后如有出入会回滚重算，所以不用等它。",
+    statsRollbackTitle: (rollbacks: number, frames: number, window: number) =>
+      `，回滚 ${rollbacks} 次（重算 ${frames} 帧），最多预测 ${window} 帧`,
     desync: (frame: number) => `检测到画面不同步（第 ${frame} 帧）`,
     emulationStopped: (detail: string) => `模拟器已停止：${detail}`,
     audioUnavailable: (detail: string) => `无法播放声音：${detail}`,
@@ -62,7 +65,7 @@ const zh = {
     romMismatch: "你的 ROM 和房间不一致，只能看大厅，无法入座或观战",
     soloHint: "单人开局，其他人观战",
     delayPlanned: (frames: number, frameRate: number) =>
-      `按双方网络延迟，输入延迟将设为 ${frames} 帧（${ms(frames, frameRate)}ms）`,
+      `按双方网络延迟，输入延迟将设为 ${frames} 帧（${ms(frames, frameRate)}ms），其余由回滚预测补偿`,
     delayDefault: (frames: number) => `还在测速，现在开始会使用默认的 ${frames} 帧输入延迟`,
     copyLink: "复制房间链接",
     copied: "已复制",
@@ -141,7 +144,9 @@ const en: Messages = {
     network: (rtt) => `Net ${rtt}ms`,
     inputDelay: (frames, frameRate) => `Input delay ${frames} ${frames === 1 ? "frame" : "frames"} (${ms(frames, frameRate)}ms)`,
     latencyTitle:
-      "Net: round trip to the room server. Input delay: fixed frames between a press and when it takes effect, giving the other player's input time to arrive.",
+      "Net: round trip to the room server. Input delay: fixed frames between a press and when it takes effect. The other player's input is predicted until it arrives, and corrected by rolling back if it differs, so nobody waits for it.",
+    statsRollbackTitle: (rollbacks, frames, window) =>
+      `, ${rollbacks} rollbacks (${frames} frames re-run), predicting up to ${window} frames`,
     desync: (frame) => `Games went out of sync (frame ${frame})`,
     emulationStopped: (detail) => `Emulation stopped: ${detail}`,
     audioUnavailable: (detail) => `Audio unavailable: ${detail}`,
@@ -166,7 +171,7 @@ const en: Messages = {
     romMismatch: "Your ROM doesn't match this room's, so you can't sit or watch",
     soloHint: "Solo game; everyone else watches",
     delayPlanned: (frames, frameRate) =>
-      `From both players' latency, input delay will be ${frames} ${frames === 1 ? "frame" : "frames"} (${ms(frames, frameRate)}ms)`,
+      `From both players' latency, input delay will be ${frames} ${frames === 1 ? "frame" : "frames"} (${ms(frames, frameRate)}ms); rollback covers the rest`,
     delayDefault: (frames) => `Still measuring; starting now uses the default ${frames}-frame input delay`,
     copyLink: "Copy room link",
     copied: "Copied",
