@@ -47,7 +47,10 @@ export type FromWorker =
   | { type: "error"; message: string }
   | { type: "netStatus"; status: NetStatus; reason?: string }
   | { type: "netRoom"; room: RoomState; you: string }
-  | { type: "netStarted"; seat: number }
+  /** `delay`: input delay in frames for this game. */
+  | { type: "netStarted"; seat: number; delay: number }
+  /** Round trip to the room server in ms. */
+  | { type: "netPing"; rttMs: number }
   | { type: "netEnded"; reason: string }
   | { type: "netDesync"; frame: number }
   | { type: "netError"; message: string };

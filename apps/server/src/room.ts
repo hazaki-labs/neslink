@@ -1,6 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  NETPLAY_INPUT_DELAY,
+  chooseInputDelay,
+  NETPLAY_PING,
+  NETPLAY_PONG,
   NETPLAY_SEATS,
   type ClientMessage,
   type RoomInfo,
@@ -36,6 +38,8 @@ export class Room extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // Answered at the edge without waking the object, so latency probes are cheap.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(NETPLAY_PING, NETPLAY_PONG));
     ctx.blockConcurrencyWhile(async () => {
       this.info = (await ctx.storage.get<RoomInfo>("info")) ?? null;
       this.hostId = (await ctx.storage.get<string>("hostId")) ?? null;
@@ -90,6 +94,14 @@ export class Room extends DurableObject<Env> {
           this.broadcast({ t: "input", s: me.seat, f: message.f, m: message.m }, ws);
         }
         break;
+      case "rtt":
+        if (me && Number.isFinite(message.ms) && message.ms >= 0 && message.ms < 10_000) {
+          me.rttMs = Math.round(message.ms);
+          ws.serializeAttachment(me);
+          // Shown in the lobby; during a game nobody looks, so skip the chatter.
+          if (!this.started) this.broadcast({ t: "room", room: this.state() });
+        }
+        break;
       case "hash":
         if (me?.seat != null && this.started && isFrame(message.f) && Number.isInteger(message.h)) {
           this.checkHash(message.f, me.seat, message.h);
@@ -129,7 +141,14 @@ export class Room extends DurableObject<Env> {
         }
       }
     }
-    const me: Attachment = { id: crypto.randomUUID().slice(0, 8), name, seat, romHash: hash, joinedAt: Date.now() };
+    const me: Attachment = {
+      id: crypto.randomUUID().slice(0, 8),
+      name,
+      seat,
+      romHash: hash,
+      rttMs: null,
+      joinedAt: Date.now(),
+    };
     ws.serializeAttachment(me);
     if (!this.hostId || !this.players().some((p) => p.id === this.hostId)) {
       this.hostId = me.id;
@@ -147,8 +166,10 @@ export class Room extends DurableObject<Env> {
     this.started = true;
     this.hashes.clear();
     await this.ctx.storage.put("started", true);
+    // Just enough delay for an input to cross between the two players, measured now.
+    const delay = chooseInputDelay(seated.map((p) => p.rttMs));
     this.broadcast({ t: "room", room: this.state() });
-    this.broadcast({ t: "start", delay: NETPLAY_INPUT_DELAY });
+    this.broadcast({ t: "start", delay });
   }
 
   private async leave(ws: WebSocket) {
@@ -201,7 +222,7 @@ export class Room extends DurableObject<Env> {
       info: this.info!,
       hostId: this.hostId,
       started: this.started,
-      players: this.players().map(({ id, name, seat, romHash }) => ({ id, name, seat, romHash })),
+      players: this.players().map(({ id, name, seat, romHash, rttMs }) => ({ id, name, seat, romHash, rttMs })),
     };
   }
 
