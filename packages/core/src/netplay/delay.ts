@@ -29,3 +29,17 @@ export function chooseInputDelay(rttsMs: readonly (number | null)[], frameMs = 1
   const frames = Math.ceil((oneWayMs * JITTER_FACTOR + JITTER_MS) / frameMs);
   return Math.min(MAX_INPUT_DELAY, Math.max(MIN_INPUT_DELAY, frames));
 }
+
+/** Most input delay rollback games use; past this, prediction does the rest. */
+export const MAX_ROLLBACK_DELAY = 3;
+
+/**
+ * Input delay (in frames) for a rollback game. A small delay still hides part
+ * of the trip, which keeps rollbacks short and rare; prediction covers the
+ * rest, so this is about half of what lockstep would need.
+ */
+export function chooseRollbackDelay(rttsMs: readonly (number | null)[], frameMs?: number): number {
+  if (rttsMs.length === 1) return MIN_INPUT_DELAY;
+  const lockstep = chooseInputDelay(rttsMs, frameMs);
+  return Math.min(MAX_ROLLBACK_DELAY, Math.max(MIN_INPUT_DELAY, Math.ceil(lockstep / 2)));
+}
