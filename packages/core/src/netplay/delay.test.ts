@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseInputDelay, MAX_INPUT_DELAY, MIN_INPUT_DELAY } from "./delay";
+import { chooseInputDelay, chooseRollbackDelay, MAX_INPUT_DELAY, MAX_ROLLBACK_DELAY, MIN_INPUT_DELAY } from "./delay";
 import { NETPLAY_INPUT_DELAY } from "./protocol";
 
 describe("chooseInputDelay", () => {
@@ -37,5 +37,15 @@ describe("chooseInputDelay", () => {
         if (frames < MAX_INPUT_DELAY) expect(frames * (1000 / 60.0988)).toBeGreaterThan(a / 2 + b / 2);
       }
     }
+  });
+});
+
+describe("chooseRollbackDelay", () => {
+  it("uses about half the lockstep delay, within 1..3 frames", () => {
+    expect(chooseRollbackDelay([20, 20])).toBe(1); // lockstep 2
+    expect(chooseRollbackDelay([45, 45])).toBe(2); // lockstep 4
+    expect(chooseRollbackDelay([400, 400])).toBe(MAX_ROLLBACK_DELAY);
+    expect(chooseRollbackDelay([300])).toBe(MIN_INPUT_DELAY);
+    expect(chooseRollbackDelay([30, null])).toBe(2); // lockstep default 4
   });
 });
