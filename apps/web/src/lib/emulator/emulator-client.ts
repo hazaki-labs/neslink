@@ -6,12 +6,15 @@ import {
 } from "@neslink/core";
 
 export type EmulatorStats = Omit<Extract<FromWorker, { type: "stats" }>, "type">;
+/** Netplay events from the worker (room updates, start/end, desync, errors). */
+export type NetEvent = Extract<FromWorker, { type: `net${string}` }>;
 
 export interface EmulatorEvents {
   onReady?: () => void;
   onRomLoaded?: () => void;
   onStats?: (stats: EmulatorStats) => void;
   onError?: (message: string) => void;
+  onNet?: (event: NetEvent) => void;
 }
 
 /**
@@ -43,6 +46,8 @@ export class EmulatorClient {
     const channel = new MessageChannel();
     void this.connectAudio(channel.port1);
 
+    document.addEventListener("visibilitychange", this.onVisibility);
+
     const offscreen = this.canvas.transferControlToOffscreen();
     this.send(
       { type: "init", canvas: offscreen, sampleRate: this.audio.sampleRate, audioPort: channel.port2 },
@@ -55,10 +60,23 @@ export class EmulatorClient {
     if (this.audio.state === "suspended") void this.audio.resume();
   }
 
-  loadRom(rom: Uint8Array<ArrayBuffer>): void {
+  /** With `autostart: false` the cartridge waits until a netplay room starts it. */
+  loadRom(rom: Uint8Array<ArrayBuffer>, autostart = true): void {
     // Copy so the caller's buffer survives the transfer.
     const copy = rom.slice();
-    this.send({ type: "loadRom", rom: copy }, [copy.buffer]);
+    this.send({ type: "loadRom", rom: copy, autostart }, [copy.buffer]);
+  }
+
+  joinRoom(url: string, name: string, romHash: string): void {
+    this.send({ type: "netJoin", url, name, romHash });
+  }
+
+  startRoom(): void {
+    this.send({ type: "netStart" });
+  }
+
+  leaveRoom(): void {
+    this.send({ type: "netLeave" });
   }
 
   setInput(port: number, mask: number): void {
@@ -90,6 +108,7 @@ export class EmulatorClient {
 
   destroy(): void {
     this.destroyed = true;
+    document.removeEventListener("visibilitychange", this.onVisibility);
     this.worker.terminate();
     void this.audio.close();
     this.pending.clear();
@@ -110,6 +129,10 @@ export class EmulatorClient {
       if (!this.destroyed) this.events.onError?.(`Audio unavailable: ${(error as Error).message}`);
     }
   }
+
+  private readonly onVisibility = () => {
+    this.send({ type: "visibility", hidden: document.hidden });
+  };
 
   private send(message: ToWorker, transfer: Transferable[] = []) {
     if (!this.destroyed) this.worker.postMessage(message, transfer);
@@ -133,6 +156,8 @@ export class EmulatorClient {
       case "error":
         this.events.onError?.(message.message);
         break;
+      default:
+        this.events.onNet?.(message);
     }
   }
 }

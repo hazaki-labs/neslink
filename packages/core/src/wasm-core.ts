@@ -48,6 +48,10 @@ export class WasmCore implements EmulatorCore {
     return new Uint8ClampedArray(this.memory.buffer as ArrayBuffer, this.nes.framePtr(), FRAME_BYTES);
   }
 
+  stateHash(): number {
+    return this.nes.wramHash();
+  }
+
   drainAudio(): Float32Array<ArrayBuffer> {
     const count = this.nes.drainAudio();
     const view = new Float32Array(this.memory.buffer as ArrayBuffer, this.nes.audioPtr(), count);

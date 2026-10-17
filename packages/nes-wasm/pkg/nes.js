@@ -102,6 +102,15 @@ export class Nes {
         const ret = wasm.nes_statePtr(this.__wbg_ptr);
         return ret >>> 0;
     }
+    /**
+     * FNV-1a hash of the 2KB work RAM, for netplay desync checks. Unlike the full
+     * save state it does not depend on the host audio sample rate.
+     * @returns {number}
+     */
+    wramHash() {
+        const ret = wasm.nes_wramHash(this.__wbg_ptr);
+        return ret >>> 0;
+    }
 }
 if (Symbol.dispose) Nes.prototype[Symbol.dispose] = Nes.prototype.free;
 function __wbg_get_imports() {

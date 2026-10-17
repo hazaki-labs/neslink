@@ -9,6 +9,15 @@
         "export PATH=\"$HOME/Library/pnpm/bin:$HOME/.local/share/mise/shims:$PATH\"; pnpm --filter @neslink/web dev --port ${PORT:-5173} --strictPort"
       ],
       "port": 5173
+    },
+    {
+      "name": "server",
+      "runtimeExecutable": "/bin/zsh",
+      "runtimeArgs": [
+        "-c",
+        "export PATH=\"$HOME/Library/pnpm/bin:$HOME/.local/share/mise/shims:$PATH\"; pnpm --filter @neslink/server dev"
+      ],
+      "port": 8787
     }
   ]
 }
