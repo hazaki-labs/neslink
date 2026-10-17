@@ -11,8 +11,8 @@ export const DEFAULT_KEYMAPS: readonly KeyMap[] = [
     KeyD: "Right",
     KeyJ: "B",
     KeyK: "A",
-    ShiftRight: "Select",
-    Enter: "Start",
+    KeyV: "Select",
+    KeyB: "Start",
   },
   {
     ArrowUp: "Up",

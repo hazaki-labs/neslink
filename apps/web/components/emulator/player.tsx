@@ -134,7 +134,7 @@ export function Player({ rom, onExit }: { rom: StoredRom; onExit: () => void }) 
         <dd>J / K</dd>
         <dd>小键盘 1 / 2</dd>
         <dt>Select / Start</dt>
-        <dd>右 Shift / Enter</dd>
+        <dd>V / B</dd>
         <dd>小键盘 5 / 小键盘 Enter</dd>
         <dt>手柄</dt>
         <dd className="col-span-2">按连接顺序分配给 1P、2P</dd>

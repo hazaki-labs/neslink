@@ -29,6 +29,6 @@ pnpm build
 |---|---|---|
 | 方向 | W A S D | 方向键 |
 | B / A | J / K | 小键盘 1 / 2 |
-| Select / Start | 右 Shift / Enter | 小键盘 5 / 小键盘 Enter |
+| Select / Start | V / B | 小键盘 5 / 小键盘 Enter |
 
 手柄（标准映射）按连接顺序分配给 1P、2P。
