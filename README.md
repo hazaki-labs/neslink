@@ -7,13 +7,20 @@
 ## 目录结构
 
 ```
-apps/web        Next.js 前端（游戏库、播放器）
-packages/core   模拟器核心接口、jsnes 适配、输入映射、Worker 消息协议
+apps/web           Next.js 前端（游戏库、播放器）
+packages/core      模拟器核心接口、WASM 核心适配、输入映射、Worker 消息协议
+packages/nes-wasm  Rust 包装层：tetanes-core 编译为 WebAssembly（wasm-bindgen）
 ```
 
 模拟器跑在 Web Worker 里（`apps/web/lib/emulator/emulator.worker.ts`），通过 OffscreenCanvas 直接绘制画面，音频则直接推给 AudioWorklet（`apps/web/public/audio-worklet.js`）。
 
 ## 开发
+
+`packages/nes-wasm/pkg` 是编译好的 WASM 产物，已经提交到仓库，所以只改前端时不需要 Rust。修改 Rust 代码后需要重新构建，依赖 Rust stable、`wasm32-unknown-unknown` target，以及与 `Cargo.lock` 中 wasm-bindgen 版本一致的 `wasm-bindgen-cli`：
+
+```bash
+pnpm build:wasm
+```
 
 ```bash
 pnpm install

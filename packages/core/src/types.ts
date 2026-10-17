@@ -39,8 +39,11 @@ export interface EmulatorCore {
   runFrame(inputs: readonly number[]): void;
   saveState(): Uint8Array;
   loadState(state: Uint8Array): void;
-  /** RGBA pixels (NES_WIDTH x NES_HEIGHT) of the last finished frame. */
+  /**
+   * RGBA pixels (NES_WIDTH x NES_HEIGHT) of the last finished frame. May be a
+   * view into core memory, valid only until the next call into the core.
+   */
   framebuffer(): Uint8ClampedArray<ArrayBuffer>;
-  /** Interleaved stereo samples produced since the last call. */
+  /** Mono samples produced since the last call (the NES has one audio channel). */
   drainAudio(): Float32Array<ArrayBuffer>;
 }

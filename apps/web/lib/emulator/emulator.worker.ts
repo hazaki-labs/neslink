@@ -1,6 +1,5 @@
 /// <reference lib="webworker" />
 import {
-  JsnesCore,
   MAX_PLAYERS,
   NES_FRAME_RATE,
   NES_HEIGHT,
@@ -8,6 +7,7 @@ import {
   type FromWorker,
   type ToAudio,
   type ToWorker,
+  WasmCore,
 } from "@neslink/core";
 
 const FRAME_MS = 1000 / NES_FRAME_RATE;
@@ -16,7 +16,7 @@ const MAX_CATCH_UP = 4;
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 
-let core: JsnesCore | null = null;
+let core: WasmCore | null = null;
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
 let image: ImageData | null = null;
 let audioPort: MessagePort | null = null;
@@ -69,7 +69,7 @@ function tick() {
     }
   } catch (error) {
     romLoaded = false;
-    post({ type: "error", message: `Emulation stopped: ${(error as Error).message}` });
+    post({ type: "error", message: `Emulation stopped: ${errorMessage(error)}` });
     return;
   }
   // Fell too far behind (tab throttled, debugger, slow device): drop the backlog.
@@ -98,10 +98,10 @@ function start() {
   schedule();
 }
 
-function handle(message: ToWorker) {
+async function handle(message: ToWorker) {
   switch (message.type) {
     case "init": {
-      core = new JsnesCore({ sampleRate: message.sampleRate });
+      core = await WasmCore.create({ sampleRate: message.sampleRate });
       audioPort = message.audioPort;
       ctx = message.canvas.getContext("2d", { alpha: false });
       if (!ctx) throw new Error("OffscreenCanvas 2D context unavailable");
@@ -147,10 +147,16 @@ function handle(message: ToWorker) {
   }
 }
 
+// Handle messages strictly in order: init is async (wasm instantiation) and
+// everything after it must wait for the core to exist.
+let queue = Promise.resolve();
 scope.onmessage = (event: MessageEvent<ToWorker>) => {
-  try {
-    handle(event.data);
-  } catch (error) {
-    post({ type: "error", message: (error as Error).message });
-  }
+  queue = queue
+    .then(() => handle(event.data))
+    .catch((error) => post({ type: "error", message: errorMessage(error) }));
 };
+
+// wasm-bindgen JsError values arrive as Error, but be defensive about thrown strings.
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}

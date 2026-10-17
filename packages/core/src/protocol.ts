@@ -22,5 +22,5 @@ export type FromWorker =
   | { type: "state"; requestId: number; state: Uint8Array<ArrayBuffer> }
   | { type: "error"; message: string };
 
-/** Messages from the worker to the AudioWorklet. */
+/** Messages from the worker to the AudioWorklet. `samples` is mono. */
 export type ToAudio = { type: "samples"; samples: Float32Array<ArrayBuffer> } | { type: "flush" };

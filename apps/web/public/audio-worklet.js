@@ -1,13 +1,12 @@
-// Plays interleaved stereo samples posted by the emulator worker through a ring buffer.
+// Plays mono samples posted by the emulator worker through a ring buffer.
 // Served as a static file because AudioWorklet modules are loaded by URL.
 
-const CAPACITY = 16384; // stereo frames (~340ms at 48kHz)
+const CAPACITY = 16384; // samples (~340ms at 48kHz)
 
 class NesAudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.left = new Float32Array(CAPACITY);
-    this.right = new Float32Array(CAPACITY);
+    this.buffer = new Float32Array(CAPACITY);
     this.read = 0;
     this.write = 0;
     this.size = 0;
@@ -33,10 +32,9 @@ class NesAudioProcessor extends AudioWorkletProcessor {
     }
     if (message.type !== "samples") return;
     const samples = message.samples;
-    for (let i = 0; i + 1 < samples.length; i += 2) {
+    for (let i = 0; i < samples.length; i++) {
       if (this.size === CAPACITY) break;
-      this.left[this.write] = samples[i];
-      this.right[this.write] = samples[i + 1];
+      this.buffer[this.write] = samples[i];
       this.write = (this.write + 1) % CAPACITY;
       this.size++;
     }
@@ -52,8 +50,7 @@ class NesAudioProcessor extends AudioWorkletProcessor {
     if (!this.primed && this.size >= this.startAt) this.primed = true;
     for (let i = 0; i < outL.length; i++) {
       if (this.primed && this.size > 0) {
-        outL[i] = this.left[this.read];
-        outR[i] = this.right[this.read];
+        outL[i] = outR[i] = this.buffer[this.read];
         this.read = (this.read + 1) % CAPACITY;
         this.size--;
       } else {
