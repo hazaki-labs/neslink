@@ -135,7 +135,7 @@ function tick(now: number) {
     }
   } catch (error) {
     romLoaded = false;
-    post({ type: "error", message: `Emulation stopped: ${errorMessage(error)}` });
+    post({ type: "error", kind: "emulationStopped", message: errorMessage(error) });
     return;
   }
 
@@ -221,7 +221,7 @@ function joinRoom(url: string, name: string, romHash: string) {
       post({ type: "netEnded", reason });
     },
     onDesync: (desyncFrame) => post({ type: "netDesync", frame: desyncFrame }),
-    onError: (message) => post({ type: "netError", message }),
+    onError: (code) => post({ type: "netError", code }),
     onPing: (rttMs) => post({ type: "netPing", rttMs }),
   });
 }
@@ -301,7 +301,7 @@ let queue = Promise.resolve();
 scope.onmessage = (event: MessageEvent<ToWorker>) => {
   queue = queue
     .then(() => handle(event.data))
-    .catch((error) => post({ type: "error", message: errorMessage(error) }));
+    .catch((error) => post({ type: "error", kind: "other", message: errorMessage(error) }));
 };
 
 function toBase64(bytes: Uint8Array): string {

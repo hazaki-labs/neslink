@@ -1,0 +1,213 @@
+import type { ReactNode } from "react";
+import type { ApiErrorCode, RoomEndReason, RoomErrorCode } from "@neslink/core";
+
+const ms = (frames: number, frameRate: number) => Math.round((frames * 1000) / frameRate);
+
+const zh = {
+  meta: {
+    description: "在浏览器里玩 NES 游戏，支持多人联机和观战。",
+  },
+  language: { label: "语言", switchTo: "English" },
+  library: {
+    title: "游戏库",
+    intro: "载入你自己的 .nes 文件开始游戏。ROM 只保存在这个浏览器里，不会上传。",
+    dropHint: "点击选择或拖入 .nes 文件",
+    play: "开始",
+    host: "联机",
+    hosting: "创建中…",
+    remove: (name: string) => `删除 ${name}`,
+    invalidRom: (file: string) => `${file} 不是有效的 .nes 文件`,
+    loadFailed: (detail: string) => `无法读取本地游戏库：${detail}`,
+  },
+  player: {
+    leaveRoom: "离开房间",
+    pause: "暂停",
+    resume: "继续",
+    reset: "重置",
+    save: "保存进度",
+    load: "读取进度",
+    saved: "已保存进度",
+    loaded: "已读取进度",
+    fullscreen: "全屏",
+    vsync: "同步",
+    statsTitle: (uneven: number) => `最近 1 秒内节奏不均的帧：${uneven}`,
+    statsNetTitle: (waits: number) => `，等待对方输入的刷新：${waits}`,
+    room: "房间",
+    youAre: (seat: number) => `你是 ${seat}P`,
+    spectating: "观战中",
+    network: (rtt: number) => `网络 ${rtt}ms`,
+    inputDelay: (frames: number, frameRate: number) => `输入延迟 ${frames} 帧（${ms(frames, frameRate)}ms）`,
+    latencyTitle: "网络：到房间服务器的往返时间。输入延迟：按键到生效之间固定等待的帧数，用来等对方的输入到达。",
+    desync: (frame: number) => `检测到画面不同步（第 ${frame} 帧）`,
+    emulationStopped: (detail: string) => `模拟器已停止：${detail}`,
+    audioUnavailable: (detail: string) => `无法播放声音：${detail}`,
+    controls: {
+      dpad: "方向",
+      gamepad: "手柄",
+      gamepadHint: "按连接顺序分配给 1P、2P",
+    },
+  },
+  lobby: {
+    room: "房间",
+    connecting: "正在连接房间…",
+    disconnected: "与房间的连接已断开",
+    host: "房主",
+    you: "（你）",
+    measuring: "测速中",
+    spectate: "去观战",
+    emptySeat: "空位",
+    sit: "坐下",
+    audience: (count: number) => `观众（${count}）`,
+    listSeparator: "、",
+    romMismatch: "你的 ROM 和房间不一致，只能看大厅，无法入座或观战",
+    soloHint: "单人开局，其他人观战",
+    delayPlanned: (frames: number, frameRate: number) =>
+      `按双方网络延迟，输入延迟将设为 ${frames} 帧（${ms(frames, frameRate)}ms）`,
+    delayDefault: (frames: number) => `还在测速，现在开始会使用默认的 ${frames} 帧输入延迟`,
+    copyLink: "复制房间链接",
+    copied: "已复制",
+    start: "开始游戏",
+    waitingForHost: "等待房主开始游戏",
+    linkHint: "打开这个链接的人可以入座，也可以观战（对局中也能进来看）",
+  },
+  entry: {
+    title: "加入房间",
+    loading: "正在读取房间…",
+    missing: "房间不存在，可能已经过期或链接有误。",
+    needRom: (game: ReactNode) => (
+      <>这个房间玩的是 {game}。请载入你自己的同一个 ROM 文件，校验一致后即可入座。</>
+    ),
+    unnamedGame: "未命名游戏",
+    pickRom: "选择 .nes 文件",
+    romHashMismatch: "这不是房间使用的那个 ROM（校验值不一致）",
+  },
+  roomErrors: {
+    malformed: "消息格式错误",
+    notHost: "只有房主可以开始游戏",
+    noPlayers: "至少要有一个人入座",
+    seatLocked: "对局进行中，不能换座位",
+    seatTaken: "这个座位已经有人了",
+    romMismatch: "你的 ROM 和房间不一致，无法入座",
+    lateJoinUnavailable: "这局开始太久了，暂时无法中途观战",
+  } satisfies Record<RoomErrorCode, string>,
+  roomEnded: {
+    peerLeft: "对方离开了房间，游戏结束",
+    disconnected: "与房间的连接断开了",
+  } satisfies Record<RoomEndReason, string>,
+  apiErrors: {
+    roomNotFound: "房间不存在",
+    badRequest: "请求格式错误",
+    missingRomHash: "缺少 ROM 校验值",
+    createFailed: "创建房间失败",
+    loadFailed: "读取房间失败",
+  } satisfies Record<ApiErrorCode | "createFailed" | "loadFailed", string>,
+  playerNamePrefix: "玩家",
+};
+
+export type Messages = typeof zh;
+
+const en: Messages = {
+  meta: {
+    description: "Play NES games in your browser, with netplay and spectating.",
+  },
+  language: { label: "Language", switchTo: "中文" },
+  library: {
+    title: "Library",
+    intro: "Load your own .nes files to play. ROMs stay in this browser and are never uploaded.",
+    dropHint: "Click to choose or drop .nes files here",
+    play: "Play",
+    host: "Netplay",
+    hosting: "Creating…",
+    remove: (name) => `Delete ${name}`,
+    invalidRom: (file) => `${file} is not a valid .nes file`,
+    loadFailed: (detail) => `Couldn't read the local library: ${detail}`,
+  },
+  player: {
+    leaveRoom: "Leave room",
+    pause: "Pause",
+    resume: "Resume",
+    reset: "Reset",
+    save: "Save state",
+    load: "Load state",
+    saved: "State saved",
+    loaded: "State loaded",
+    fullscreen: "Fullscreen",
+    vsync: "vsync",
+    statsTitle: (uneven) => `Unevenly paced frames in the last second: ${uneven}`,
+    statsNetTitle: (waits) => `, refreshes spent waiting for the other player: ${waits}`,
+    room: "Room",
+    youAre: (seat) => `You are ${seat}P`,
+    spectating: "Spectating",
+    network: (rtt) => `Net ${rtt}ms`,
+    inputDelay: (frames, frameRate) => `Input delay ${frames} ${frames === 1 ? "frame" : "frames"} (${ms(frames, frameRate)}ms)`,
+    latencyTitle:
+      "Net: round trip to the room server. Input delay: fixed frames between a press and when it takes effect, giving the other player's input time to arrive.",
+    desync: (frame) => `Games went out of sync (frame ${frame})`,
+    emulationStopped: (detail) => `Emulation stopped: ${detail}`,
+    audioUnavailable: (detail) => `Audio unavailable: ${detail}`,
+    controls: {
+      dpad: "D-pad",
+      gamepad: "Gamepad",
+      gamepadHint: "Assigned to 1P and 2P in connection order",
+    },
+  },
+  lobby: {
+    room: "Room",
+    connecting: "Connecting to the room…",
+    disconnected: "Lost connection to the room",
+    host: "Host",
+    you: " (you)",
+    measuring: "measuring",
+    spectate: "Spectate",
+    emptySeat: "Empty",
+    sit: "Sit",
+    audience: (count) => `Spectators (${count})`,
+    listSeparator: ", ",
+    romMismatch: "Your ROM doesn't match this room's, so you can't sit or watch",
+    soloHint: "Solo game; everyone else watches",
+    delayPlanned: (frames, frameRate) =>
+      `From both players' latency, input delay will be ${frames} ${frames === 1 ? "frame" : "frames"} (${ms(frames, frameRate)}ms)`,
+    delayDefault: (frames) => `Still measuring; starting now uses the default ${frames}-frame input delay`,
+    copyLink: "Copy room link",
+    copied: "Copied",
+    start: "Start game",
+    waitingForHost: "Waiting for the host to start",
+    linkHint: "Anyone with this link can take a seat or watch, even mid-game",
+  },
+  entry: {
+    title: "Join room",
+    loading: "Loading room…",
+    missing: "This room doesn't exist. It may have expired, or the link is wrong.",
+    needRom: (game) => <>This room is playing {game}. Load your own copy of the same ROM to join; it is checked by hash.</>,
+    unnamedGame: "an untitled game",
+    pickRom: "Choose a .nes file",
+    romHashMismatch: "That's not the ROM this room uses (hash mismatch)",
+  },
+  roomErrors: {
+    malformed: "Malformed message",
+    notHost: "Only the host can start the game",
+    noPlayers: "At least one person needs to take a seat",
+    seatLocked: "Seats can't change during a game",
+    seatTaken: "That seat is taken",
+    romMismatch: "Your ROM doesn't match this room's, so you can't sit",
+    lateJoinUnavailable: "This game has run too long to join mid-way right now",
+  },
+  roomEnded: {
+    peerLeft: "The other player left; game over",
+    disconnected: "Lost connection to the room",
+  },
+  apiErrors: {
+    roomNotFound: "Room not found",
+    badRequest: "Malformed request",
+    missingRomHash: "Missing ROM hash",
+    createFailed: "Couldn't create the room",
+    loadFailed: "Couldn't load the room",
+  },
+  playerNamePrefix: "Player",
+};
+
+export const MESSAGES = { zh, en } as const;
+export type Locale = keyof typeof MESSAGES;
+export const LOCALES: readonly Locale[] = ["zh", "en"];
+/** BCP 47 tags for <html lang>. */
+export const HTML_LANG: Record<Locale, string> = { zh: "zh-CN", en: "en" };

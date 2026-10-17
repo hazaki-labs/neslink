@@ -6,6 +6,11 @@ import {
 } from "@neslink/core";
 
 export type EmulatorStats = Omit<Extract<FromWorker, { type: "stats" }>, "type">;
+/** What went wrong (for the UI to word) plus the untranslated detail. */
+export interface EmulatorError {
+  kind: "emulationStopped" | "audioUnavailable" | "other";
+  message: string;
+}
 /** Netplay events from the worker (room updates, start/end, desync, errors). */
 export type NetEvent = Extract<FromWorker, { type: `net${string}` }>;
 
@@ -13,7 +18,7 @@ export interface EmulatorEvents {
   onReady?: () => void;
   onRomLoaded?: () => void;
   onStats?: (stats: EmulatorStats) => void;
-  onError?: (message: string) => void;
+  onError?: (error: EmulatorError) => void;
   onNet?: (event: NetEvent) => void;
 }
 
@@ -39,7 +44,7 @@ export class EmulatorClient {
     });
     this.worker.onmessage = (event: MessageEvent<FromWorker>) => this.onMessage(event.data);
     this.worker.onerror = (event) => {
-      if (!this.destroyed) this.events.onError?.(event.message || "Worker crashed");
+      if (!this.destroyed) this.events.onError?.({ kind: "other", message: event.message || "Worker crashed" });
     };
 
     this.audio = new AudioContext({ latencyHint: "interactive" });
@@ -131,7 +136,7 @@ export class EmulatorClient {
       node.connect(this.audio.destination);
     } catch (error) {
       // destroy() closes the context, which rejects a pending addModule.
-      if (!this.destroyed) this.events.onError?.(`Audio unavailable: ${(error as Error).message}`);
+      if (!this.destroyed) this.events.onError?.({ kind: "audioUnavailable", message: (error as Error).message });
     }
   }
 
@@ -159,7 +164,7 @@ export class EmulatorClient {
         this.pending.delete(message.requestId);
         break;
       case "error":
-        this.events.onError?.(message.message);
+        this.events.onError?.({ kind: message.kind, message: message.message });
         break;
       default:
         this.events.onNet?.(message);

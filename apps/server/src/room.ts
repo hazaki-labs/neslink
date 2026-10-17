@@ -97,7 +97,7 @@ export class Room extends DurableObject<Env> {
     try {
       message = JSON.parse(typeof data === "string" ? data : new TextDecoder().decode(data));
     } catch {
-      return this.send(ws, { t: "error", message: "Malformed message" });
+      return this.send(ws, { t: "error", code: "malformed" });
     }
     const me = this.player(ws);
 
@@ -156,7 +156,7 @@ export class Room extends DurableObject<Env> {
   }
 
   private async join(ws: WebSocket, rawName: unknown, romHash: unknown) {
-    const name = typeof rawName === "string" && rawName.trim() ? rawName.trim().slice(0, 20) : "玩家";
+    const name = typeof rawName === "string" && rawName.trim() ? rawName.trim().slice(0, 20) : "Player";
     const hash = typeof romHash === "string" ? romHash : "";
     // The first person in (the host, normally) sits down; everyone after starts as a
     // spectator and takes a free seat if they want to play.
@@ -184,7 +184,7 @@ export class Room extends DurableObject<Env> {
     if (me.romHash !== this.info!.romHash) return;
     const game = this.game;
     if (!game || game.log.length >= MAX_LOGGED_INPUTS) {
-      return this.send(ws, { t: "error", message: "这局开始太久了，暂时无法中途观战" });
+      return this.send(ws, { t: "error", code: "lateJoinUnavailable" });
     }
     this.send(ws, {
       t: "start",
@@ -196,14 +196,14 @@ export class Room extends DurableObject<Env> {
   }
 
   private takeSeat(ws: WebSocket, me: Attachment, seat: unknown) {
-    if (this.started) return this.send(ws, { t: "error", message: "对局进行中，不能换座位" });
+    if (this.started) return this.send(ws, { t: "error", code: "seatLocked" });
     if (seat === null) {
       me.seat = null;
     } else {
       if (!Number.isInteger(seat) || (seat as number) < 0 || (seat as number) >= NETPLAY_SEATS) return;
-      if (me.romHash !== this.info!.romHash) return this.send(ws, { t: "error", message: "你的 ROM 和房间不一致，无法入座" });
+      if (me.romHash !== this.info!.romHash) return this.send(ws, { t: "error", code: "romMismatch" });
       if (this.players().some((p) => p.seat === seat && p.id !== me.id)) {
-        return this.send(ws, { t: "error", message: "这个座位已经有人了" });
+        return this.send(ws, { t: "error", code: "seatTaken" });
       }
       me.seat = seat as number;
     }
@@ -212,10 +212,10 @@ export class Room extends DurableObject<Env> {
   }
 
   private async start(ws: WebSocket, me: Attachment) {
-    if (me.id !== this.hostId) return this.send(ws, { t: "error", message: "只有房主可以开始游戏" });
+    if (me.id !== this.hostId) return this.send(ws, { t: "error", code: "notHost" });
     if (this.started) return;
     const seated = this.players().filter((p) => p.seat !== null);
-    if (seated.length === 0) return this.send(ws, { t: "error", message: "至少要有一个人入座" });
+    if (seated.length === 0) return this.send(ws, { t: "error", code: "noPlayers" });
     // Just enough delay for an input to cross between the players, measured now.
     const delay = chooseInputDelay(seated.map((p) => p.rttMs));
     const seats = seated.map((p) => p.seat!).sort((a, b) => a - b);

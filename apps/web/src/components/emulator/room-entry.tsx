@@ -2,14 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Upload } from "lucide-react";
 import { hashRom, parseRomHeader, type RoomInfo } from "@neslink/core";
 import { Button } from "@/components/ui/button";
-import { getRoom } from "@/lib/rooms";
+import { useI18n, type Messages } from "@/i18n";
+import { getRoom, RoomApiError } from "@/lib/rooms";
 import { getRom, putRom, type StoredRom } from "@/lib/storage";
 import { Player } from "./player";
 
 type Entry =
   | { step: "loading" }
   | { step: "missing" }
-  | { step: "failed"; message: string }
+  | { step: "failed"; message: (t: Messages) => string }
   /** The room exists but this browser does not have its ROM yet. */
   | { step: "needRom"; info: RoomInfo }
   | { step: "ready"; info: RoomInfo; rom: StoredRom };
@@ -20,8 +21,10 @@ type Entry =
  * browser, so a joiner brings their own copy and we check it by hash).
  */
 export function RoomEntry({ roomId, knownRom, onExit }: { roomId: string; knownRom: StoredRom | null; onExit: () => void }) {
+  const { t } = useI18n();
   const [entry, setEntry] = useState<Entry>({ step: "loading" });
-  const [error, setError] = useState<string | null>(null);
+  // Worded at render time, so switching language rewords it too.
+  const [error, setError] = useState<((t: Messages) => string) | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -33,7 +36,9 @@ export function RoomEntry({ roomId, knownRom, onExit }: { roomId: string; knownR
       return rom ? ({ step: "ready", info, rom } as const) : ({ step: "needRom", info } as const);
     })().then(
       (next) => !cancelled && setEntry(next),
-      (e: Error) => !cancelled && setEntry({ step: "failed", message: e.message }),
+      (e: Error) =>
+        !cancelled &&
+        setEntry({ step: "failed", message: (t) => (e instanceof RoomApiError ? t.apiErrors[e.code] : e.message) }),
     );
     return () => {
       cancelled = true;
@@ -47,10 +52,10 @@ export function RoomEntry({ roomId, knownRom, onExit }: { roomId: string; knownR
     try {
       parseRomHeader(data);
     } catch {
-      return setError(`${file.name} 不是有效的 .nes 文件`);
+      return setError(() => (t: Messages) => t.library.invalidRom(file.name));
     }
     const hash = await hashRom(data);
-    if (hash !== entry.info.romHash) return setError("这不是房间使用的那个 ROM（校验值不一致）");
+    if (hash !== entry.info.romHash) return setError(() => (t: Messages) => t.entry.romHashMismatch);
     const rom: StoredRom = { hash, name: file.name.replace(/\.nes$/i, ""), size: data.length, addedAt: Date.now(), data };
     await putRom(rom);
     setEntry({ step: "ready", info: entry.info, rom });
@@ -62,23 +67,24 @@ export function RoomEntry({ roomId, knownRom, onExit }: { roomId: string; knownR
     <div className="flex w-full max-w-md flex-col gap-4">
       <Button variant="ghost" size="sm" className="self-start" onClick={onExit}>
         <ArrowLeft data-icon="inline-start" />
-        游戏库
+        {t.library.title}
       </Button>
       <h1 className="text-xl font-semibold">
-        加入房间 <span className="font-mono">{roomId}</span>
+        {t.entry.title} <span className="font-mono">{roomId}</span>
       </h1>
-      {entry.step === "loading" && <p className="text-sm text-muted-foreground">正在读取房间…</p>}
-      {entry.step === "missing" && <p className="text-sm text-muted-foreground">房间不存在，可能已经过期或链接有误。</p>}
-      {entry.step === "failed" && <p className="text-sm text-destructive">{entry.message}</p>}
+      {entry.step === "loading" && <p className="text-sm text-muted-foreground">{t.entry.loading}</p>}
+      {entry.step === "missing" && <p className="text-sm text-muted-foreground">{t.entry.missing}</p>}
+      {entry.step === "failed" && <p className="text-sm text-destructive">{entry.message(t)}</p>}
       {entry.step === "needRom" && (
         <>
           <p className="text-sm text-muted-foreground">
-            这个房间玩的是 <span className="font-medium text-foreground">{entry.info.romName || "未命名游戏"}</span>
-            。请载入你自己的同一个 ROM 文件，校验一致后即可入座。
+            {t.entry.needRom(
+              <span className="font-medium text-foreground">{entry.info.romName || t.entry.unnamedGame}</span>,
+            )}
           </p>
           <Button variant="outline" onClick={() => inputRef.current?.click()}>
             <Upload data-icon="inline-start" />
-            选择 .nes 文件
+            {t.entry.pickRom}
           </Button>
           <input
             ref={inputRef}
@@ -90,7 +96,7 @@ export function RoomEntry({ roomId, knownRom, onExit }: { roomId: string; knownR
               e.target.value = "";
             }}
           />
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p className="text-sm text-destructive">{error(t)}</p>}
         </>
       )}
     </div>
