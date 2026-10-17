@@ -190,7 +190,7 @@ function joinRoom(url: string, name: string, romHash: string) {
       romLoaded = true;
       frame = 0;
       owedFrames = 0;
-      post({ type: "netStarted", seat: session.localSeat });
+      post({ type: "netStarted", seat: session.localSeat, delay: session.delay });
       start();
     },
     onEnd: (reason) => {
@@ -199,6 +199,7 @@ function joinRoom(url: string, name: string, romHash: string) {
     },
     onDesync: (desyncFrame) => post({ type: "netDesync", frame: desyncFrame }),
     onError: (message) => post({ type: "netError", message }),
+    onPing: (rttMs) => post({ type: "netPing", rttMs }),
   });
 }
 

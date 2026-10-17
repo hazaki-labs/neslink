@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Check, Copy, Crown, Play } from "lucide-react";
-import { NETPLAY_SEATS, type NetStatus, type RoomState } from "@neslink/core";
+import { chooseInputDelay, NES_FRAME_RATE, NETPLAY_SEATS, type NetStatus, type RoomState } from "@neslink/core";
 import { Button } from "@/components/ui/button";
 import { roomLink } from "@/lib/rooms";
 
@@ -18,6 +18,9 @@ export function RoomLobby({ status, room, you, notice, onStart }: Props) {
   const isHost = room !== null && room.hostId === you;
   const seated = room?.players.filter((p) => p.seat !== null) ?? [];
   const canStart = isHost && seated.length === NETPLAY_SEATS;
+  // The same rule the room applies when the game starts.
+  const delay = seated.length === NETPLAY_SEATS ? chooseInputDelay(seated.map((p) => p.rttMs)) : null;
+  const measured = seated.every((p) => p.rttMs !== null);
 
   const copy = async () => {
     if (!room) return;
@@ -48,11 +51,16 @@ export function RoomLobby({ status, room, you, notice, onStart }: Props) {
                 <li key={seat} className="flex items-center gap-3 rounded-md bg-white/10 px-3 py-2 text-sm">
                   <span className="w-6 font-mono text-white/60">{seat + 1}P</span>
                   {player ? (
-                    <span className="flex items-center gap-1.5">
-                      {player.name}
-                      {player.id === room?.hostId && <Crown className="size-3.5 text-amber-300" aria-label="房主" />}
-                      {player.id === you && <span className="text-white/50">（你）</span>}
-                    </span>
+                    <>
+                      <span className="flex items-center gap-1.5">
+                        {player.name}
+                        {player.id === room?.hostId && <Crown className="size-3.5 text-amber-300" aria-label="房主" />}
+                        {player.id === you && <span className="text-white/50">（你）</span>}
+                      </span>
+                      <span className="ml-auto font-mono text-xs text-white/50 tabular-nums">
+                        {player.rttMs !== null ? `${player.rttMs}ms` : "测速中"}
+                      </span>
+                    </>
                   ) : (
                     <span className="text-white/40">等待加入…</span>
                   )}
@@ -67,6 +75,14 @@ export function RoomLobby({ status, room, you, notice, onStart }: Props) {
               </li>
             )}
           </ul>
+        )}
+
+        {delay !== null && (
+          <p className="text-xs text-white/60">
+            {measured
+              ? `按双方网络延迟，输入延迟将设为 ${delay} 帧（${Math.round((delay * 1000) / NES_FRAME_RATE)}ms）`
+              : `还在测速，现在开始会使用默认的 ${delay} 帧输入延迟`}
+          </p>
         )}
 
         {notice && <p className="text-sm text-amber-300">{notice}</p>}

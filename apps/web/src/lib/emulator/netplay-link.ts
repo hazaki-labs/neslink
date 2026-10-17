@@ -1,5 +1,7 @@
 import {
   LockstepSession,
+  NETPLAY_PING,
+  NETPLAY_PONG,
   NETPLAY_SEATS,
   type ClientMessage,
   type NetStatus,
@@ -16,7 +18,12 @@ export interface NetplayEvents {
   onEnd(reason: string): void;
   onDesync(frame: number): void;
   onError(message: string): void;
+  /** Round trip to the room server in ms (median of recent probes). */
+  onPing(rttMs: number): void;
 }
+
+const PING_INTERVAL_MS = 1000;
+const PING_SAMPLES = 5;
 
 /** One player's connection to a room: the socket plus the lockstep session once started. */
 export class NetplayLink {
@@ -25,6 +32,9 @@ export class NetplayLink {
   private you: string | null = null;
   private room: RoomState | null = null;
   private closed = false;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private pingSentAt: number | null = null;
+  private readonly rtts: number[] = [];
 
   constructor(url: string, hello: { name: string; romHash: string }, private readonly events: NetplayEvents) {
     events.onStatus("connecting");
@@ -32,9 +42,15 @@ export class NetplayLink {
     this.ws.onopen = () => {
       events.onStatus("open");
       this.send({ t: "hello", ...hello });
+      this.ping();
+      this.pingTimer = setInterval(() => this.ping(), PING_INTERVAL_MS);
     };
-    this.ws.onmessage = (event) => this.onMessage(JSON.parse(event.data as string) as ServerMessage);
+    this.ws.onmessage = (event) => {
+      if (event.data === NETPLAY_PONG) return this.onPong();
+      this.onMessage(JSON.parse(event.data as string) as ServerMessage);
+    };
     this.ws.onclose = (event) => {
+      this.stopPinging();
       if (this.closed) return;
       this.closed = true;
       if (this.session) {
@@ -58,9 +74,34 @@ export class NetplayLink {
   }
 
   close(): void {
+    this.stopPinging();
     this.closed = true;
     this.session = null;
     this.ws.close(1000, "leave");
+  }
+
+  private ping() {
+    // One probe in flight at a time; a lost one is simply replaced next interval.
+    if (this.ws.readyState !== WebSocket.OPEN) return;
+    this.pingSentAt = performance.now();
+    this.ws.send(NETPLAY_PING);
+  }
+
+  private onPong() {
+    if (this.pingSentAt === null) return;
+    this.rtts.push(performance.now() - this.pingSentAt);
+    this.pingSentAt = null;
+    if (this.rtts.length > PING_SAMPLES) this.rtts.shift();
+    const sorted = [...this.rtts].sort((a, b) => a - b);
+    const rtt = sorted[sorted.length >> 1];
+    this.events.onPing(rtt);
+    // The room picks the game's input delay from every player's latest figure.
+    this.send({ t: "rtt", ms: rtt });
+  }
+
+  private stopPinging() {
+    if (this.pingTimer !== null) clearInterval(this.pingTimer);
+    this.pingTimer = null;
   }
 
   private onMessage(message: ServerMessage) {

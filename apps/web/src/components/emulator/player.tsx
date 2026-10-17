@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Download, Maximize, Pause, Play, RotateCcw, Save } from "lucide-react";
-import { NES_HEIGHT, NES_WIDTH, type NetStatus, type RoomInfo, type RoomState } from "@neslink/core";
+import { NES_FRAME_RATE, NES_HEIGHT, NES_WIDTH, type NetStatus, type RoomInfo, type RoomState } from "@neslink/core";
 import { Button } from "@/components/ui/button";
 import { EmulatorClient, type EmulatorStats, type NetEvent } from "@/lib/emulator/emulator-client";
 import { useControllerInput } from "@/lib/emulator/use-controller-input";
@@ -17,9 +17,21 @@ interface NetView {
   /** Our seat while a game is running, else null (in the lobby). */
   seat: number | null;
   notice: string | null;
+  /** Round trip to the room server, once measured. */
+  rttMs: number | null;
+  /** Input delay of the running game, in frames. */
+  delayFrames: number | null;
 }
 
-const INITIAL_NET: NetView = { status: "connecting", room: null, you: null, seat: null, notice: null };
+const INITIAL_NET: NetView = {
+  status: "connecting",
+  room: null,
+  you: null,
+  seat: null,
+  notice: null,
+  rttMs: null,
+  delayFrames: null,
+};
 
 function applyNetEvent(view: NetView, event: NetEvent): NetView {
   switch (event.type) {
@@ -28,7 +40,9 @@ function applyNetEvent(view: NetView, event: NetEvent): NetView {
     case "netRoom":
       return { ...view, room: event.room, you: event.you };
     case "netStarted":
-      return { ...view, seat: event.seat, notice: null };
+      return { ...view, seat: event.seat, delayFrames: event.delay, notice: null };
+    case "netPing":
+      return { ...view, rttMs: event.rttMs };
     case "netEnded":
       return { ...view, seat: null, notice: event.reason };
     default:
@@ -131,6 +145,16 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
           <span className="text-sm text-muted-foreground">
             房间 <span className="font-mono">{roomId}</span>
             {net.seat !== null && ` · 你是 ${net.seat + 1}P`}
+          </span>
+        )}
+        {roomId && net.rttMs !== null && (
+          <span
+            className="font-mono text-xs text-muted-foreground tabular-nums"
+            title="网络：到房间服务器的往返时间。输入延迟：按键到生效之间固定等待的帧数，用来等对方的输入到达。"
+          >
+            网络 {Math.round(net.rttMs)}ms
+            {net.delayFrames !== null &&
+              ` · 输入延迟 ${net.delayFrames} 帧（${Math.round((net.delayFrames * 1000) / NES_FRAME_RATE)}ms）`}
           </span>
         )}
         <span

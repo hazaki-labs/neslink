@@ -3,11 +3,20 @@
  * Messages are small JSON objects; inputs are a few bytes per frame per player.
  */
 
-/** Frames between pressing a button and the frame it takes effect on. Hides relay latency. */
+/**
+ * Frames between pressing a button and the frame it takes effect on, which hides relay
+ * latency. Used until both players have measured their latency (see chooseInputDelay).
+ */
 export const NETPLAY_INPUT_DELAY = 4;
 /** How often (in frames) players report a state hash so the server can spot desyncs. */
 export const NETPLAY_HASH_INTERVAL = 60;
 export const NETPLAY_SEATS = 2;
+/**
+ * Latency probe: the room answers this exact text frame with NETPLAY_PONG
+ * itself (Durable Object auto-response), without running room code.
+ */
+export const NETPLAY_PING = "ping";
+export const NETPLAY_PONG = "pong";
 
 export interface RoomInfo {
   id: string;
@@ -22,6 +31,8 @@ export interface RoomPlayer {
   seat: number | null;
   /** Hash of the ROM this player has loaded; must equal the room's to play. */
   romHash: string;
+  /** Latest round trip this player measured to the room, if any yet. */
+  rttMs: number | null;
 }
 
 export interface RoomState {
@@ -38,7 +49,9 @@ export type ClientMessage =
   /** Local input `m` for frame `f`. */
   | { t: "input"; f: number; m: number }
   /** State hash `h` after running frame `f`. */
-  | { t: "hash"; f: number; h: number };
+  | { t: "hash"; f: number; h: number }
+  /** This player's measured round trip to the room, for choosing the input delay. */
+  | { t: "rtt"; ms: number };
 
 export type ServerMessage =
   | { t: "welcome"; you: string; room: RoomState }
