@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  chooseRollbackDelay,
+  chooseNetplayDelay,
   NETPLAY_PING,
   NETPLAY_PONG,
   NETPLAY_SEATS,
@@ -136,6 +136,8 @@ export class Room extends DurableObject<Env> {
       case "rtt":
         if (me && Number.isFinite(message.ms) && message.ms >= 0 && message.ms < 10_000) {
           me.rttMs = Math.round(message.ms);
+          const direct = message.direct;
+          me.directRttMs = typeof direct === "number" && Number.isFinite(direct) && direct >= 0 && direct < 10_000 ? Math.round(direct) : null;
           ws.serializeAttachment(me);
           // Shown in the lobby; during a game nobody looks, so skip the chatter.
           if (!this.started) this.broadcast({ t: "room", room: this.state() });
@@ -173,6 +175,7 @@ export class Room extends DurableObject<Env> {
       seat,
       romHash: hash,
       rttMs: null,
+      directRttMs: null,
       joinedAt: Date.now(),
     };
     ws.serializeAttachment(me);
@@ -222,9 +225,9 @@ export class Room extends DurableObject<Env> {
     if (this.started) return;
     const seated = this.players().filter((p) => p.seat !== null);
     if (seated.length === 0) return this.send(ws, { t: "error", code: "noPlayers" });
-    // Players roll back, so a small delay (from latency measured now) is enough;
-    // prediction covers the rest of the trip.
-    const delay = chooseRollbackDelay(seated.map((p) => p.rttMs));
+    // Players roll back, so a small delay (from latency measured now, over a
+    // direct link if both have one) is enough; prediction covers the rest.
+    const delay = chooseNetplayDelay(seated);
     const seats = seated.map((p) => p.seat!).sort((a, b) => a - b);
     this.game = { delay, seats, snapshot: null, log: [] };
     this.started = true;
@@ -315,7 +318,14 @@ export class Room extends DurableObject<Env> {
       info: this.info!,
       hostId: this.hostId,
       started: this.started,
-      players: this.players().map(({ id, name, seat, romHash, rttMs }) => ({ id, name, seat, romHash, rttMs })),
+      players: this.players().map(({ id, name, seat, romHash, rttMs, directRttMs }) => ({
+        id,
+        name,
+        seat,
+        romHash,
+        rttMs,
+        directRttMs: directRttMs ?? null,
+      })),
     };
   }
 
