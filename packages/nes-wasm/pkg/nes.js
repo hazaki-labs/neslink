@@ -50,6 +50,16 @@ export class Nes {
         }
     }
     /**
+     * Restores rollback slot `slot`, saved earlier on this machine by [`Nes::save_slot`].
+     * @param {number} slot
+     */
+    loadSlot(slot) {
+        const ret = wasm.nes_loadSlot(this.__wbg_ptr, slot);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @param {Uint8Array} state
      */
     loadState(state) {
@@ -79,6 +89,16 @@ export class Nes {
      */
     runFrame(p1, p2) {
         const ret = wasm.nes_runFrame(this.__wbg_ptr, p1, p2);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Saves the console into rollback slot `slot` (slots grow as needed).
+     * @param {number} slot
+     */
+    saveSlot(slot) {
+        const ret = wasm.nes_saveSlot(this.__wbg_ptr, slot);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
