@@ -72,8 +72,9 @@ export class EmulatorClient {
     this.send({ type: "loadRom", rom: copy, autostart }, [copy.buffer]);
   }
 
-  joinRoom(url: string, name: string, romHash: string): void {
-    this.send({ type: "netJoin", url, name, romHash });
+  /** `simulated`: dev tool, extra latency to add to this player's link. */
+  joinRoom(url: string, name: string, romHash: string, simulated: { lagMs: number; jitterMs: number } | null = null): void {
+    this.send({ type: "netJoin", url, name, romHash, simulated });
   }
 
   startRoom(): void {

@@ -31,12 +31,13 @@ export function chooseInputDelay(rttsMs: readonly (number | null)[], frameMs = 1
 }
 
 /** Most input delay rollback games use; past this, prediction does the rest. */
-export const MAX_ROLLBACK_DELAY = 3;
+export const MAX_ROLLBACK_DELAY = 4;
 
 /**
  * Input delay (in frames) for a rollback game. A small delay still hides part
  * of the trip, which keeps rollbacks short and rare; prediction covers the
- * rest, so this is about half of what lockstep would need.
+ * rest, so this is about half of what lockstep would need. Together with a window
+ * of at least 4 predicted frames, up to 4 frames of delay covers ~130ms one way.
  */
 export function chooseRollbackDelay(rttsMs: readonly (number | null)[], frameMs?: number): number {
   if (rttsMs.length === 1) return MIN_INPUT_DELAY;

@@ -20,7 +20,14 @@ export type ToWorker =
   /** Whether the page is hidden; netplay keeps running on a timer when it is. */
   | { type: "visibility"; hidden: boolean }
   /** Connect to a netplay room; the worker owns the socket so inputs skip the UI thread. */
-  | { type: "netJoin"; url: string; name: string; romHash: string }
+  | {
+      type: "netJoin";
+      url: string;
+      name: string;
+      romHash: string;
+      /** Dev tool: extra latency to simulate on this player's link. */
+      simulated: { lagMs: number; jitterMs: number } | null;
+    }
   /** Host only: ask the room to start. */
   | { type: "netStart" }
   /** Lobby: sit in a seat, or null to spectate. */
@@ -49,6 +56,8 @@ export type FromWorker =
       replayedFrames: number;
       /** Netplay rollback: frames we may run ahead of the other player, sized to this device. */
       rollbackWindow: number | null;
+      /** Smoothed time to emulate one frame on this device, in ms. */
+      frameCostMs: number;
     }
   | { type: "state"; requestId: number; state: Uint8Array<ArrayBuffer> }
   /** `kind` says what failed; `message` is the underlying (untranslated) detail. */

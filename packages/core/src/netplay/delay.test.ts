@@ -41,10 +41,11 @@ describe("chooseInputDelay", () => {
 });
 
 describe("chooseRollbackDelay", () => {
-  it("uses about half the lockstep delay, within 1..3 frames", () => {
+  it("uses about half the lockstep delay, within 1..4 frames", () => {
     expect(chooseRollbackDelay([20, 20])).toBe(1); // lockstep 2
     expect(chooseRollbackDelay([45, 45])).toBe(2); // lockstep 4
     expect(chooseRollbackDelay([400, 400])).toBe(MAX_ROLLBACK_DELAY);
+    expect(chooseRollbackDelay([1, 193])).toBe(4); // lockstep 7
     expect(chooseRollbackDelay([300])).toBe(MIN_INPUT_DELAY);
     expect(chooseRollbackDelay([30, null])).toBe(2); // lockstep default 4
   });
