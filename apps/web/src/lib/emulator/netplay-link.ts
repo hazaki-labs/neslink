@@ -29,8 +29,12 @@ export interface GameStart {
   startFrame: number;
   /** Base64 save state for a late spectator or a rejoining player, else null. */
   snapshot: string | null;
+  /** The snapshot is a state a player loaded at startFrame: skip loads logged for that frame. */
+  snapshotLoaded: boolean;
   /** Inputs the room logged since that frame, all seats (ours too, when rejoining). */
   inputs: [seat: number, frame: number, mask: number][];
+  /** Seats nobody plays; the first seat's player stands in for them. */
+  vacant: number[];
 }
 
 /** Who this tab is in the room, to rejoin as after a drop or a refresh. */
@@ -62,6 +66,12 @@ export interface NetplayEvents {
   onCredentials(credentials: RoomCredentials): void;
   /** Someone in the room reacted. */
   onReaction(from: string, kind: ReactionKind): void;
+  /** Seat `seat` loads base64 save state `data` before `frame`; its input for that frame follows. */
+  onLoad(seat: number, frame: number, data: string): void;
+  /** Seat `seat` fell vacant: fill it in with neutral input from `frame` (or from what we hold). */
+  onStandIn(seat: number, frame: number | undefined): void;
+  /** Someone takes seat `seat`: stop standing in for it, and report with `sendHandedOver`. */
+  onHandover(seat: number): void;
 }
 
 /** Extra latency to simulate on this link (dev tool, from `?lag=` / `?swing=`). */
@@ -170,6 +180,11 @@ export class NetplayLink {
     this.send({ t: "react", kind });
   }
 
+  /** Whether we host the room: only the host may reset a running game. */
+  get isHost(): boolean {
+    return this.you !== null && this.room?.hostId === this.you;
+  }
+
   requestStart(): void {
     this.send({ t: "start" });
   }
@@ -195,8 +210,19 @@ export class NetplayLink {
     this.send({ t: "snapshot", f: frame, s: state });
   }
 
-  sendInput(frame: number, mask: number, advantage?: number): void {
-    this.send({ t: "input", f: frame, m: mask, a: advantage });
+  /** Load base64 `state` before `frame` for everyone; send ahead of that frame's input. */
+  sendLoad(frame: number, state: string): void {
+    this.send({ t: "load", f: frame, s: state });
+  }
+
+  /** Our input for `frame`, or (with `seat`) the one we fill in for that vacant seat. */
+  sendInput(frame: number, mask: number, advantage?: number, seat?: number): void {
+    this.send({ t: "input", f: frame, m: mask, a: advantage, s: seat });
+  }
+
+  /** Stopped standing in for `seat`; `frame` is the last frame we filled. */
+  sendHandedOver(seat: number, frame: number): void {
+    this.send({ t: "handedOver", s: seat, f: frame });
   }
 
   sendHash(frame: number, hash: number): void {
@@ -279,7 +305,9 @@ export class NetplayLink {
           delay: message.delay,
           startFrame: message.from?.f ?? 0,
           snapshot: message.from?.s ?? null,
+          snapshotLoaded: message.from?.loaded === true,
           inputs: message.inputs ?? [],
+          vacant: message.vacant ?? [],
         });
         this.stopRelay();
         const node = this.room?.relay?.nodes.find((node) => node.id === this.room?.relay?.activeNodeId);
@@ -294,6 +322,15 @@ export class NetplayLink {
         if (message.a !== undefined && this.session && !this.session.spectating) {
           (this.session as RollbackSession).receiveAdvantage(message.a);
         }
+        break;
+      case "load":
+        this.events.onLoad(message.s, message.f, message.data);
+        break;
+      case "standIn":
+        this.events.onStandIn(message.s, message.f);
+        break;
+      case "handover":
+        this.events.onHandover(message.s);
         break;
       case "desync":
         this.events.onDesync(message.f);
