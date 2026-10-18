@@ -78,7 +78,7 @@ describe("redundant packets over a lossy channel", () => {
         peer.session.resolve();
         if (peer.session.canAdvance()) {
           const mask = (peer.session.frame * (peer.seat + 3)) % 7;
-          peer.history.push(peer.session.advance(mask), mask);
+          peer.history.push(peer.session.advance(mask)!, mask);
         }
         // Resent every tick, stalled or not: a stalled side's last packet may have been lost.
         // 60% of packets vanish; the rest take 2-4 ticks, in any order.
