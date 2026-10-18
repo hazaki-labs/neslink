@@ -142,7 +142,9 @@ export class NetplayLink {
       this.stopRelay();
       if (this.closed) return;
       const now = performance.now();
-      if (this.you && this.resumeToken && (this.reconnectBy === 0 || now < this.reconnectBy)) {
+      // "replaced": this identity reconnected from another tab, which now owns it.
+      const replaced = event.code === 1000 && event.reason === "replaced";
+      if (!replaced && this.you && this.resumeToken && (this.reconnectBy === 0 || now < this.reconnectBy)) {
         // Unexpected drop: try again until the room gives our seat away. The game
         // keeps running on predictions meanwhile, until its window runs out.
         if (this.reconnectBy === 0) this.reconnectBy = now + NETPLAY_RECONNECT_GRACE_MS - 1000;
