@@ -11,8 +11,8 @@ export function relayNodes(env: Env): RelayNode[] {
     if (!node || typeof node.id !== "string" || !/^[a-z0-9-]{1,32}$/.test(node.id) || node.id === "main" || ids.has(node.id) ||
         typeof node.name !== "string" || !node.name.trim() || node.name.length > 60 || typeof node.url !== "string") throw new Error("Invalid relay node");
     const url = new URL(node.url);
-    if ((url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) ||
-        url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new Error("Relay URLs must be HTTPS origins (HTTP only on loopback)");
+    if ((url.protocol !== "https:" && !(url.protocol === "http:" && (env.RELAY_ALLOW_INSECURE === "1" || ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) ||
+        url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new Error("Relay URLs must be HTTPS origins (non-loopback HTTP requires RELAY_ALLOW_INSECURE=1)");
     ids.add(node.id);
     return { id: node.id, name: node.name, url: url.origin };
   });

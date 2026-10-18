@@ -34,7 +34,7 @@ export function createRelay(config: RelayConfig) {
     const match = request.url?.match(/^\/rooms\/([a-z0-9]{6})\/ws$/);
     const ip = request.socket.remoteAddress ?? "unknown";
     // Do not trust X-Forwarded-For from arbitrary clients.
-    if (!match || !origin || !config.allowedOrigins.has(origin)) {
+    if (config.probeOnly || !match || !origin || (!config.allowedOrigins.has("*") && !config.allowedOrigins.has(origin))) {
       socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return;
     }
     if (wss.clients.size >= config.maxConnections || pending >= 128 || (pendingByIp.get(ip) ?? 0) >= 8) {

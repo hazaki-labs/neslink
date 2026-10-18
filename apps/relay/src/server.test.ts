@@ -99,8 +99,45 @@ it("keeps replay protection across restarts and expires the cache only after the
   }
 });
 
-it("requires strong keys and exact allowed origins in deployment configuration", () => {
+it("requires strong keys and supports an optional exact-origin restriction", () => {
   expect(() => readConfig({ RELAY_NODE_ID: "east", RELAY_KEYS: JSON.stringify({ key: "weak" }), RELAY_ALLOWED_ORIGINS: origin })).toThrow();
-  expect(() => readConfig({ RELAY_NODE_ID: "east", RELAY_KEYS: JSON.stringify({ key: secret }), RELAY_ALLOWED_ORIGINS: "*" })).toThrow();
+  expect(() => readConfig({ RELAY_NODE_ID: "east", RELAY_KEYS: JSON.stringify({ key: secret }), RELAY_ALLOWED_ORIGINS: "*,https://nes.example" })).toThrow();
+  expect(readConfig({ RELAY_NODE_ID: "east", RELAY_KEYS: JSON.stringify({ key: secret }) }).allowedOrigins.has("*")).toBe(true);
   expect(readConfig({ RELAY_NODE_ID: "east", RELAY_KEYS: JSON.stringify({ key: secret }), RELAY_ALLOWED_ORIGINS: origin }).nodeId).toBe("east");
+});
+
+it("requires an explicit opt-in for HTTP origins and allows fail-closed probe-only startup", async () => {
+  const base = { RELAY_NODE_ID: "east", RELAY_KEYS: JSON.stringify({ key: secret }) };
+  expect(() => readConfig({ ...base, RELAY_ALLOWED_ORIGINS: "http://game.example" })).toThrow();
+  expect(readConfig({ ...base, RELAY_ALLOW_INSECURE: "1", RELAY_ALLOWED_ORIGINS: "http://game.example" }).allowedOrigins.has("http://game.example")).toBe(true);
+  expect(readConfig(base).allowedOrigins.has("*")).toBe(true);
+  const node = createRelay({ ...readConfig({ ...base, RELAY_PROBE_ONLY: "1" }), replayPath: ":memory:", port: 0 });
+  try {
+    await new Promise<void>((resolve) => node.server.listen(0, "127.0.0.1", resolve));
+    const port = (node.server.address() as { port: number }).port;
+    expect(await (await fetch(`http://127.0.0.1:${port}/health`)).text()).toBe("ok");
+    await expect(new Promise((_, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/rooms/abcdef/ws`, { origin });
+      ws.on("error", reject);
+    })).rejects.toThrow("403");
+  } finally { await node.close(); }
+});
+
+it("allows an unconfigured website with a valid ticket but rejects a mismatched ticket origin", async () => {
+  const node = createRelay({ ...config, allowedOrigins: new Set(["*"]) });
+  try {
+    await new Promise<void>((resolve) => node.server.listen(0, "127.0.0.1", resolve));
+    const port = (node.server.address() as { port: number }).port;
+    const website = "https://previously-unknown.example";
+    const grant = await issueTicket("east", room, website, key, { seat: 0, playerId: "11111111", gameId });
+    const open = (requestOrigin: string) => new Promise<string>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/rooms/abcdef/ws`, { origin: requestOrigin });
+      ws.on("error", reject);
+      ws.on("open", () => ws.send(JSON.stringify({ t: "auth", ticket: grant.ticket })));
+      ws.on("message", (raw) => resolve(JSON.parse(raw.toString()).t));
+      ws.on("close", (code) => reject(new Error(`Closed ${code}`)));
+    });
+    await expect(open("https://wrong.example")).rejects.toThrow("1008");
+    await expect(open(website)).resolves.toBe("authenticated");
+  } finally { await node.close(); }
 });

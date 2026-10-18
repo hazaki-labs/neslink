@@ -13,6 +13,7 @@ export interface Env {
   TURN_KEY_API_TOKEN?: string;
   RELAY_NODES?: string;
   RELAY_SIGNING_KEYS?: string;
+  RELAY_ALLOW_INSECURE?: string;
 }
 
 // Unambiguous characters only, since people read room codes to each other.

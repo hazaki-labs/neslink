@@ -61,11 +61,13 @@ Configure these environment variables through your deployment secret manager:
 | --- | --- |
 | `RELAY_NODE_ID` | The matching controller node ID, e.g. `tokyo` |
 | `RELAY_KEYS` | JSON object `{"2026-01":"THE_SAME_RANDOM_KEY_FOR_THIS_NODE"}` |
-| `RELAY_ALLOWED_ORIGINS` | Exact website origins, comma separated, e.g. `https://nes.example.com` |
+| `RELAY_ALLOWED_ORIGINS` | Optional exact-origin restriction, comma separated; defaults to `*` (any website with a valid signed ticket) |
 | `RELAY_REPLAY_DB` | Persistent SQLite path; default `data/relay-tickets.sqlite` relative to the node working directory |
 | `HOST` | Bind address, default `127.0.0.1`; use `0.0.0.0` inside a container |
 | `PORT` | HTTP listen port, default `8788` |
 | `RELAY_MAX_CONNECTIONS` | Hard connection cap, default `1024` |
+| `RELAY_PROBE_ONLY` | Set `1` to serve public probes and reject all WebSocket connections; allows an empty origin list while the controller is not configured |
+| `RELAY_ALLOW_INSECURE` | Set `1` to explicitly accept non-loopback HTTP website origins; HTTPS is the default |
 
 ```sh
 pnpm install --frozen-lockfile
@@ -93,6 +95,24 @@ IDs and retains them until expiration. Running independent replicas with the sam
 ID but separate databases would break one-use guarantees; horizontal replicas
 would need a shared atomic replay store first. On storage failure authentication
 fails closed. The input relay itself keeps no durable game state.
+
+### HTTP/WS without a domain or certificate
+
+An IP/port endpoint can be used with an explicit controller-side
+`RELAY_ALLOW_INSECURE=1`; HTTPS remains the default. If the website itself also
+uses non-loopback HTTP, set the node's `RELAY_ALLOW_INSECURE=1` and list that
+exact HTTP website origin. This retains signed, expiring, single-use admission;
+it does not encrypt tokens or input traffic. Browsers normally block HTTP probes
+and WS connections from an HTTPS website as mixed content. This setting cannot
+override the browser restriction, and emulator APIs may require a secure context.
+
+A node can be deployed before configuring a controller: give it the node ID and
+verification key, and leave `RELAY_ALLOWED_ORIGINS` unset (defaults to `*`). No
+website URL is required. Any website may attempt a connection, but only a valid
+signed ticket is admitted; its origin must still match the handshake origin.
+Later configure the matching signing key on the controller. `RELAY_PROBE_ONLY=1`
+is an optional maintenance mode that disables all game admission. There is no
+unauthenticated game mode.
 
 ## Selection and measurements
 
