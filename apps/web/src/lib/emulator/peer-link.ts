@@ -8,10 +8,39 @@ export interface PeerStatus {
   rttMs: number | null;
 }
 
-/** Public STUN only: two players behind ordinary NATs can usually reach each other this way. */
-const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }, { urls: "stun:stun.l.google.com:19302" }];
+/** Public STUN: two players behind ordinary NATs can usually reach each other this way. */
+const STUN_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }, { urls: "stun:stun.l.google.com:19302" }];
+/** Don't hold the connection up for long waiting on TURN credentials. */
+const TURN_TIMEOUT_MS = 3000;
+/** The server hands out credentials valid for an hour; refresh well before that. */
+const TURN_REFRESH_MS = 30 * 60 * 1000;
 const PING_INTERVAL_MS = 1000;
 const PING_SAMPLES = 5;
+
+let turn: { servers: Promise<RTCIceServer[]>; fetched: number } | null = null;
+
+/**
+ * TURN relays from the room server (`/api/turn`), for when STUN can't punch
+ * through (symmetric NATs). Empty when the server has no TURN configured or
+ * the request fails, which leaves STUN only.
+ */
+function turnServers(): Promise<RTCIceServer[]> {
+  if (!turn || Date.now() - turn.fetched > TURN_REFRESH_MS) {
+    const servers = fetch("/api/turn", { signal: AbortSignal.timeout(TURN_TIMEOUT_MS) })
+      .then(async (res) => {
+        if (!res.ok) return [];
+        const body = (await res.json()) as { iceServers?: RTCIceServer[] };
+        return Array.isArray(body.iceServers) ? body.iceServers : [];
+      })
+      .catch(() => []);
+    turn = { servers, fetched: Date.now() };
+    // A failure is retried on the next connection rather than cached.
+    void servers.then((list) => {
+      if (list.length === 0 && turn?.servers === servers) turn = null;
+    });
+  }
+  return turn.servers;
+}
 
 type Signal = { sdp: RTCSessionDescriptionInit } | { candidate: RTCIceCandidateInit };
 
@@ -22,7 +51,7 @@ type Signal = { sdp: RTCSessionDescriptionInit } | { candidate: RTCIceCandidateI
  *
  * Purely an accelerator: inputs also travel through the room server, and
  * whichever copy arrives first wins, so failing to connect (strict NATs, no
- * TURN relay) only means playing over the server as before.
+ * TURN relay configured) only means playing over the server as before.
  */
 export class PeerLink {
   private pc: RTCPeerConnection | null = null;
@@ -38,6 +67,8 @@ export class PeerLink {
     private readonly port: MessagePort,
     private readonly signal: (to: string, data: Signal) => void,
     private readonly onStatus: (status: PeerStatus) => void,
+    /** "relay" (dev tool) only allows TURN routes, to check TURN works. */
+    private readonly policy: RTCIceTransportPolicy = "all",
   ) {
     // Packets from the worker go straight out over the channel.
     port.onmessage = (event: MessageEvent<PeerPacket>) => {
@@ -52,8 +83,18 @@ export class PeerLink {
     this.peerId = peerId;
     if (!selfId || !peerId) return;
     this.setStatus({ state: "connecting", rttMs: null });
+    void turnServers().then((turn) => {
+      // Signals that arrive meanwhile wait in `pending`, since there's no pc yet.
+      if (this.peerId === peerId && !this.pc) this.connect(selfId, peerId, turn);
+    });
+  }
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  private connect(selfId: string, peerId: string, turn: RTCIceServer[]) {
+    if (this.policy === "relay" && turn.length === 0) {
+      this.setStatus({ state: "failed", rttMs: null });
+      return;
+    }
+    const pc = new RTCPeerConnection({ iceServers: [...STUN_SERVERS, ...turn], iceTransportPolicy: this.policy });
     this.pc = pc;
     pc.onicecandidate = (event) => {
       if (event.candidate) this.signal(peerId, { candidate: event.candidate.toJSON() });

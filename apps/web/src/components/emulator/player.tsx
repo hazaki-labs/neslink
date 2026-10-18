@@ -19,7 +19,7 @@ import {
   type PeerStatus,
 } from "@/lib/emulator/emulator-client";
 import { useControllerInput } from "@/lib/emulator/use-controller-input";
-import { directLinkEnabled, playerName, roomSocketUrl, simulatedNetwork } from "@/lib/rooms";
+import { directLinkPolicy, playerName, roomSocketUrl, simulatedNetwork } from "@/lib/rooms";
 import { getSave, putSave, type StoredRom } from "@/lib/storage";
 import { RoomLobby } from "./room-lobby";
 
@@ -126,7 +126,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     const stopFitting = fitIntegerScale(screen, emulator.canvas);
     if (roomId) {
       emulator.loadRom(rom.data, false);
-      emulator.joinRoom(roomSocketUrl(roomId), playerName(), rom.hash, simulatedNetwork(), directLinkEnabled());
+      emulator.joinRoom(roomSocketUrl(roomId), playerName(), rom.hash, simulatedNetwork(), directLinkPolicy());
     } else {
       emulator.loadRom(rom.data);
     }
