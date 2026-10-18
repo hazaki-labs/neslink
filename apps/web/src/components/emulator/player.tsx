@@ -280,6 +280,8 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         <dt>{t.player.controls.dpad}</dt>
         <dd>W A S D</dd>
         <dt>B / A</dt>
+        <dd>N / M</dd>
+        <dt>{t.player.controls.turbo}</dt>
         <dd>J / K</dd>
         <dt>Select / Start</dt>
         <dd>V / B</dd>

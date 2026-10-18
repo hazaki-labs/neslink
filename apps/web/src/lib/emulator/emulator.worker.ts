@@ -15,6 +15,9 @@ import {
   LockstepSession,
   unpackInputs,
   type PeerPacket,
+  applyTurbo,
+  mergeControllers,
+  type ControllerState,
   RollbackSession,
   WasmCore,
 } from "@neslink/core";
@@ -33,7 +36,7 @@ let image: ImageData | null = null;
 let audioPort: MessagePort | null = null;
 let rom: Uint8Array<ArrayBuffer> | null = null;
 
-const inputs = new Array<number>(MAX_PLAYERS).fill(0);
+const inputs: ControllerState[] = Array.from({ length: MAX_PLAYERS }, () => ({ held: 0, turbo: 0 }));
 const rafPacer = new FramePacer(FRAME_MS, true);
 const timerPacer = new FramePacer(FRAME_MS, false);
 let pacer = hasRaf ? rafPacer : timerPacer;
@@ -124,9 +127,18 @@ function step(frameInputs: readonly number[], live = true) {
   if (samples.length > 0) postAudio({ type: "samples", samples }, [samples.buffer]);
 }
 
-/** Either keyboard layout or gamepad drives the local seat; the seat itself comes from the room. */
-function localMask() {
-  return inputs[0] | inputs[1];
+/**
+ * The local seat's presses for `frameNumber`: keyboard and any gamepad drive it
+ * (the seat itself comes from the room), with turbo expanded for that frame,
+ * so what goes over the network is exactly what the game runs with.
+ */
+function localMask(frameNumber: number) {
+  return applyTurbo(mergeControllers(inputs[0], inputs[1]), frameNumber);
+}
+
+/** Local (single-player) presses on every port for `frameNumber`. */
+function soloMasks(frameNumber: number) {
+  return inputs.map((state) => applyTurbo(state, frameNumber));
 }
 
 function render() {
@@ -163,7 +175,7 @@ function tickPlayer(session: RollbackSession, due: number): boolean {
   const replayed = session.resolve();
   let ran = 0;
   while (owedFrames > 0 && session.canAdvance()) {
-    const mask = localMask();
+    const mask = localMask(session.frame);
     const localFrame = session.advance(mask);
     link!.sendInput(localFrame, mask, session.localAdvantage());
     peerHistory.push(localFrame, mask);
@@ -204,7 +216,7 @@ function runDue(due: number): boolean {
   const session = link?.session;
   if (session instanceof RollbackSession) return tickPlayer(session, due);
   if (session instanceof LockstepSession) return tickSpectator(session, due) > 0;
-  for (let i = 0; i < due; i++) step(inputs);
+  for (let i = 0; i < due; i++) step(soloMasks(frame));
   return due > 0;
 }
 
@@ -408,7 +420,7 @@ async function handle(message: ToWorker) {
       break;
     }
     case "input":
-      if (message.port >= 0 && message.port < MAX_PLAYERS) inputs[message.port] = message.mask;
+      if (message.port >= 0 && message.port < MAX_PLAYERS) inputs[message.port] = { held: message.held, turbo: message.turbo };
       break;
     case "pause":
       // Pausing, resetting or loading a state alone would desync a netplay game.

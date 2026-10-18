@@ -60,8 +60,9 @@ const zh = {
     audioUnavailable: (detail: string) => `无法播放声音：${detail}`,
     controls: {
       dpad: "方向",
+      turbo: "连发 B / A",
       gamepad: "手柄",
-      gamepadHint: "按连接顺序分配给 1P、2P",
+      gamepadHint: "按连接顺序分配给 1P、2P；X / Y 为连发 B / A",
     },
   },
   lobby: {
@@ -184,8 +185,9 @@ const en: Messages = {
     audioUnavailable: (detail) => `Audio unavailable: ${detail}`,
     controls: {
       dpad: "D-pad",
+      turbo: "Turbo B / A",
       gamepad: "Gamepad",
-      gamepadHint: "Assigned to 1P and 2P in connection order",
+      gamepadHint: "Assigned to 1P and 2P in connection order; X / Y are turbo B / A",
     },
   },
   lobby: {

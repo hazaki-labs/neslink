@@ -3,6 +3,7 @@ import {
   NES_WIDTH,
   type FromWorker,
   type ToWorker,
+  type ControllerState,
 } from "@neslink/core";
 import { PeerLink, type PeerStatus } from "./peer-link";
 
@@ -126,8 +127,9 @@ export class EmulatorClient {
     this.send({ type: "netLeave" });
   }
 
-  setInput(port: number, mask: number): void {
-    this.send({ type: "input", port, mask });
+  /** A controller's held buttons and turbo A/B; the worker expands turbo per frame. */
+  setInput(port: number, state: ControllerState): void {
+    this.send({ type: "input", port, held: state.held, turbo: state.turbo });
   }
 
   setPaused(paused: boolean): void {
