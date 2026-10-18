@@ -1,11 +1,15 @@
 import type { ApiErrorCode, RoomInfo } from "@neslink/core/netplay";
 import { Room } from "./room";
+import { turnServers } from "./turn";
 
 export { Room };
 
 export interface Env {
   ROOMS: DurableObjectNamespace<Room>;
   ASSETS: Fetcher;
+  /** Cloudflare Realtime TURN key; both are secrets, and TURN is off without them. */
+  TURN_KEY_ID?: string;
+  TURN_KEY_API_TOKEN?: string;
 }
 
 // Unambiguous characters only, since people read room codes to each other.
@@ -19,6 +23,10 @@ export default {
 
     if (url.pathname === "/api/rooms" && request.method === "POST") {
       return createRoom(request, env);
+    }
+
+    if (url.pathname === "/api/turn" && request.method === "GET") {
+      return turnServers(env);
     }
 
     const match = url.pathname.match(/^\/api\/rooms\/([a-z0-9]+)(\/ws)?$/);
