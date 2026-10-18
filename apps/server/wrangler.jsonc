@@ -3,9 +3,10 @@
   "name": "neslink",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  // Public metadata only. Put per-node signing keys in the RELAY_SIGNING_KEYS secret.
-  // See docs/relay-nodes.md. Empty preserves the built-in room route.
-  "vars": { "RELAY_NODES": "[]" },
+  // RELAY_NODES and RELAY_ALLOW_INSECURE are set as Worker variables in the Cloudflare
+  // dashboard so node addresses stay out of Git; keep_vars stops deploys from wiping them.
+  // Signing keys live in the RELAY_SIGNING_KEYS secret. See docs/relay-nodes.md.
+  "keep_vars": true,
   // One Worker serves the built SPA and the API; only /api/* reaches the Worker code.
   "assets": {
     "directory": "../web/dist",
