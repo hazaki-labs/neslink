@@ -34,7 +34,8 @@ export type RoomErrorCode =
   | "nodeLocked"
   | "seatTaken"
   | "romMismatch"
-  | "lateJoinUnavailable";
+  | "lateJoinUnavailable"
+  | "playerReconnecting";
 
 /** Errors from the HTTP rooms API, as `{ error: code }`. */
 export type ApiErrorCode = "roomNotFound" | "badRequest" | "missingRomHash" | "relayUnavailable" | "connectionDenied" | "tooManyRequests";
@@ -48,6 +49,12 @@ export interface RoomInfo {
   romName: string;
 }
 
+/** How long a seated player who dropped (not left) keeps their seat, in ms. */
+export const NETPLAY_RECONNECT_GRACE_MS = 20_000;
+
+/** Quick reactions a player can send everyone in the room. */
+export type ReactionKind = "thumbs";
+
 export interface RoomPlayer {
   id: string;
   name: string;
@@ -60,6 +67,8 @@ export interface RoomPlayer {
   /** Round trip over this player's direct link to the other player, if one is up. */
   directRttMs: number | null;
   relayProbes?: RelayProbe[];
+  /** False while a seated player who dropped may still come back (their seat is kept). */
+  connected?: boolean;
 }
 
 export interface RoomState {
@@ -73,7 +82,10 @@ export interface RoomState {
 export type ClientMessage =
   | { t: "relayProbes"; probes: RelayProbe[] }
   | { t: "relaySelect"; selection: RelaySelection }
-  | { t: "hello"; name: string; romHash: string }
+  /** `resume`: rejoin as the player `id` this tab was before a drop or refresh. */
+  | { t: "hello"; name: string; romHash: string; resume?: { id: string; token: string } }
+  | { t: "rename"; name: string }
+  | { t: "react"; kind: ReactionKind }
   /** Before a game: sit in a seat, or stand up to spectate (null). */
   | { t: "seat"; seat: number | null }
   /** Host only: begin the game with whoever is seated (at least one). */
@@ -94,7 +106,9 @@ export type ClientMessage =
   | { t: "signal"; to: string; data: unknown };
 
 export type ServerMessage =
-  | { t: "welcome"; you: string; room: RoomState; connectionToken?: string }
+  /** `resumeToken`: keep it (per room, per tab) to rejoin as `you` after a drop. */
+  | { t: "welcome"; you: string; room: RoomState; connectionToken?: string; resumeToken?: string }
+  | { t: "react"; from: string; kind: ReactionKind }
   | { t: "room"; room: RoomState }
   | {
       t: "start";

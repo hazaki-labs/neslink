@@ -129,3 +129,18 @@
     @apply font-sans;
   }
 }
+/* A thumbs-up drifting up the game screen (Q in a room). */
+@keyframes reaction-float {
+  0% {
+    transform: translateY(0) scale(0.6);
+    opacity: 0;
+  }
+  15% {
+    transform: translateY(-12px) scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-160px) scale(1);
+    opacity: 0;
+  }
+}
