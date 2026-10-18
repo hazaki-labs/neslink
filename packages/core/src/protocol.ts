@@ -13,7 +13,8 @@ export type ToWorker =
     }
   /** `autostart: false` loads the cartridge but waits (netplay waits for the room to start). */
   | { type: "loadRom"; rom: Uint8Array<ArrayBuffer>; autostart: boolean }
-  | { type: "input"; port: number; mask: number }
+  /** A controller's state: `held` buttons, and `turbo` A/B the worker auto-fires per frame. */
+  | { type: "input"; port: number; held: number; turbo: number }
   | { type: "pause"; paused: boolean }
   | { type: "reset" }
   | { type: "saveState"; requestId: number }

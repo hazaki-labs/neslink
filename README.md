@@ -87,7 +87,10 @@ node. See [configuration, deployment and security](docs/relay-nodes.md).
 | Button | Key |
 |---|---|
 | D-pad | W A S D |
-| B / A | J / K |
+| B / A | N / M |
+| Turbo B / A | J / K |
 | Select / Start | V / B |
 
-The keyboard controls 1P. Gamepads (standard mapping) are assigned to 1P and 2P in connection order, so a second local player uses a gamepad. In a room you choose your seat, and the keyboard or any gamepad controls it.
+Turbo buttons press and release on their own while held (2 frames on, 2 off: about 15 presses a second). The turbo is expanded per frame inside the emulator worker, so in netplay the other side receives the actual presses and stays in sync.
+
+The keyboard controls 1P. Gamepads (standard mapping) are assigned to 1P and 2P in connection order, so a second local player uses a gamepad: the bottom / right face buttons are B / A, and the left / top ones (X / Y) are turbo B / A. In a room you choose your seat, and the keyboard or any gamepad controls it.
