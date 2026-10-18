@@ -21,6 +21,8 @@ pub struct Nes {
     audio: Vec<f32>,
     state: Vec<u8>,
     sample_rate: f32,
+    /// Rollback snapshots, kept inside wasm so saving one per frame costs no JS copy.
+    slots: Vec<Vec<u8>>,
 }
 
 #[wasm_bindgen]
@@ -46,6 +48,7 @@ impl Nes {
             audio: Vec::new(),
             state: Vec::new(),
             sample_rate,
+            slots: Vec::new(),
         }
     }
 
@@ -115,6 +118,39 @@ impl Nes {
         self.deck.wram().iter().fold(0x811c_9dc5, |hash, &byte| {
             (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
         })
+    }
+
+    /// Saves the console into rollback slot `slot` (slots grow as needed).
+    #[wasm_bindgen(js_name = saveSlot)]
+    pub fn save_slot(&mut self, slot: usize) -> Result<(), JsError> {
+        if self.slots.len() <= slot {
+            self.slots.resize_with(slot + 1, Vec::new);
+        }
+        let len = self.deck.serialized_state_len()?;
+        let buf = &mut self.slots[slot];
+        // Same size for the life of a cart, so after the first save this never reallocates.
+        buf.resize(len, 0);
+        self.deck.serialize_state_into(buf)?;
+        Ok(())
+    }
+
+    /// Restores rollback slot `slot`, saved earlier on this machine by [`Nes::save_slot`].
+    #[wasm_bindgen(js_name = loadSlot)]
+    pub fn load_slot(&mut self, slot: usize) -> Result<(), JsError> {
+        let buf = self.slots.get(slot).filter(|buf| !buf.is_empty()).ok_or_else(|| JsError::new("Empty rollback slot"))?;
+        self.deck.deserialize_state(buf)?;
+        Ok(())
+    }
+
+    /// Address and length of rollback slot `slot`, to copy out (e.g. as a spectator snapshot).
+    #[wasm_bindgen(js_name = slotPtr)]
+    pub fn slot_ptr(&self, slot: usize) -> *const u8 {
+        self.slots.get(slot).map_or(std::ptr::null(), |buf| buf.as_ptr())
+    }
+
+    #[wasm_bindgen(js_name = slotLen)]
+    pub fn slot_len(&self, slot: usize) -> usize {
+        self.slots.get(slot).map_or(0, Vec::len)
     }
 
     #[wasm_bindgen(js_name = loadState)]

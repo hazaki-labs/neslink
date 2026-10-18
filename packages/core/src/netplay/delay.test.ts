@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseInputDelay, MAX_INPUT_DELAY, MIN_INPUT_DELAY } from "./delay";
+import { chooseInputDelay, chooseNetplayDelay, chooseRollbackDelay, MAX_INPUT_DELAY, MAX_ROLLBACK_DELAY, MIN_INPUT_DELAY } from "./delay";
 import { NETPLAY_INPUT_DELAY } from "./protocol";
 
 describe("chooseInputDelay", () => {
@@ -37,5 +37,33 @@ describe("chooseInputDelay", () => {
         if (frames < MAX_INPUT_DELAY) expect(frames * (1000 / 60.0988)).toBeGreaterThan(a / 2 + b / 2);
       }
     }
+  });
+});
+
+describe("chooseNetplayDelay", () => {
+  it("uses the direct link when every player has one", () => {
+    // 190ms to the server would mean 4 frames; a 10ms direct link needs only 1.
+    expect(chooseNetplayDelay([{ rttMs: 190, directRttMs: 10 }, { rttMs: 1, directRttMs: 10 }])).toBe(1);
+    expect(chooseNetplayDelay([{ rttMs: 190, directRttMs: 120 }, { rttMs: 1, directRttMs: 118 }])).toBe(3);
+  });
+
+  it("falls back to the server latency without a direct link on both sides", () => {
+    expect(chooseNetplayDelay([{ rttMs: 1, directRttMs: 10 }, { rttMs: 193, directRttMs: null }])).toBe(4);
+    expect(chooseNetplayDelay([{ rttMs: 45, directRttMs: null }, { rttMs: 45, directRttMs: null }])).toBe(2);
+  });
+
+  it("uses the minimum alone", () => {
+    expect(chooseNetplayDelay([{ rttMs: 300, directRttMs: null }])).toBe(MIN_INPUT_DELAY);
+  });
+});
+
+describe("chooseRollbackDelay", () => {
+  it("uses about half the lockstep delay, within 1..4 frames", () => {
+    expect(chooseRollbackDelay([20, 20])).toBe(1); // lockstep 2
+    expect(chooseRollbackDelay([45, 45])).toBe(2); // lockstep 4
+    expect(chooseRollbackDelay([400, 400])).toBe(MAX_ROLLBACK_DELAY);
+    expect(chooseRollbackDelay([1, 193])).toBe(4); // lockstep 7
+    expect(chooseRollbackDelay([300])).toBe(MIN_INPUT_DELAY);
+    expect(chooseRollbackDelay([30, null])).toBe(2); // lockstep default 4
   });
 });
