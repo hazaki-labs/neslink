@@ -119,7 +119,7 @@ it("compares the oldest retained hash frame at capacity, including after pruning
   vi.unstubAllGlobals();
 });
 
-it("keeps a dropped player's seat and game, lets them rejoin, and ends the game when they never come back", async () => {
+it("keeps a dropped player's seat and game, lets them rejoin, and frees the seat when they never come back", async () => {
   const h = harness(); const room = await h.load(); await room.init(info);
   const host = await h.join(room, "Host"); const guest = await h.join(room, "Guest");
   await send(room, guest, { t: "seat", seat: 1 });
@@ -144,12 +144,52 @@ it("keeps a dropped player's seat and game, lets them rejoin, and ends the game 
   expect(back.attachment).toMatchObject({ id: you, seat: 1 });
   expect(back.messages.find((m) => m.t === "start")).toMatchObject({ seats: [0, 1], inputs: [[0, 2, 1], [1, 2, 2]] });
 
-  // Gone for longer than the grace period: the game ends.
+  // Gone for longer than the grace period: 2P falls vacant and 1P fills it in from there.
   await room.webSocketClose(back as any, 1006, "");
   vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
   await room.alarm();
-  expect(h.data.get("started")).toBe(false);
-  expect(host.messages.filter((m) => m.t === "room").at(-1).room.players.some((p: any) => p.id === you)).toBe(false);
+  expect(h.data.get("started")).toBe(true);
+  const last = host.messages.filter((m) => m.t === "room").at(-1).room;
+  expect(last.players.some((p: any) => p.id === you)).toBe(false);
+  expect(last.vacantSeats).toEqual([1]);
+  expect(host.messages).toContainEqual({ t: "standIn", s: 1, f: 3 });
+});
+
+it("plays a solo game with 2P stood in for, and hands 2P to a spectator who sits down", async () => {
+  const h = harness(); const room = await h.load(); await room.init(info);
+  const host = await h.join(room, "Host"); const watcher = await h.join(room, "Watcher");
+  await send(room, host, { t: "start" });
+  expect(watcher.messages.find((m) => m.t === "start")).toMatchObject({ seats: [0, 1], vacant: [1] });
+  await send(room, host, { t: "input", f: 4, m: 1 });
+  await send(room, host, { t: "input", f: 4, m: 0, s: 1 });
+  // Nobody else may stand in, or claim a seat that is not vacant.
+  await send(room, watcher, { t: "input", f: 5, m: 0, s: 1 });
+  expect(watcher.messages).toContainEqual({ t: "input", s: 1, f: 4, m: 0 });
+
+  await send(room, watcher, { t: "seat", seat: 1 });
+  expect(host.messages).toContainEqual({ t: "handover", s: 1 });
+  // Stand-in inputs already on the way still count, then the stand-in reports where it stopped.
+  await send(room, host, { t: "input", f: 5, m: 0, s: 1 });
+  const starts = () => watcher.messages.filter((m) => m.t === "start");
+  expect(starts()).toHaveLength(1);
+  await send(room, host, { t: "handedOver", s: 1, f: 5 });
+  expect(starts()).toHaveLength(2);
+  expect(starts()[1]).toMatchObject({ seats: [0, 1], vacant: [], inputs: [[0, 4, 1], [1, 4, 0], [1, 5, 0]] });
+  expect(watcher.attachment).toMatchObject({ seat: 1 });
+  // The seat is theirs now: the host can no longer stand in.
+  await send(room, host, { t: "input", f: 6, m: 0, s: 1 });
+  expect(watcher.messages.some((m) => m.t === "input" && m.f === 6)).toBe(false);
+});
+
+it("keeps standing in when the spectator taking over leaves first", async () => {
+  const h = harness(); const room = await h.load(); await room.init(info);
+  const host = await h.join(room, "Host"); const watcher = await h.join(room, "Watcher");
+  await send(room, host, { t: "start" });
+  await send(room, watcher, { t: "seat", seat: 1 });
+  await room.webSocketClose(watcher as any, 1006, "");
+  await send(room, host, { t: "handedOver", s: 1, f: 9 });
+  expect(host.messages).toContainEqual({ t: "standIn", s: 1, f: 10 });
+  expect(host.messages.filter((m) => m.t === "room").at(-1).room.vacantSeats).toEqual([1]);
 });
 
 it("relays thumbs-ups and renames", async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Download, Maximize, Pause, Play, RotateCcw, Save } from "lucide-react";
+import { ArrowLeft, Download, Gamepad2, Maximize, Pause, Play, RotateCcw, Save } from "lucide-react";
 import {
   NES_FRAME_RATE,
   NES_HEIGHT,
@@ -204,6 +204,25 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     ? (net.room?.players.filter((p) => p.seat !== null && p.connected === false && p.id !== net.you) ?? [])
     : [];
 
+  // Seats of the running game nobody plays: a spectator with the room's ROM may sit down in one.
+  const vacantSeats = net.playing ? (net.room?.vacantSeats ?? []) : [];
+  const myRom = net.room?.players.find((p) => p.id === net.you)?.romHash;
+  const openSeat = net.seat === null && myRom === net.room?.info.romHash ? vacantSeats[0] : undefined;
+
+  // Tell a player when the other seat empties mid-game (the game goes on).
+  const vacantBefore = useRef<number[] | null>(null);
+  useEffect(() => {
+    if (!net.playing || net.seat === null) {
+      vacantBefore.current = null;
+      return;
+    }
+    const before = vacantBefore.current;
+    vacantBefore.current = vacantSeats;
+    const opened = before && vacantSeats.find((seat) => !before.includes(seat));
+    if (opened !== undefined && opened !== null) flash((t) => t.player.seatOpened(opened + 1), 4000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [net.playing, net.seat, vacantSeats.join()]);
+
   const togglePause = () => {
     client?.setPaused(!paused);
     setPaused(!paused);
@@ -323,6 +342,12 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
           <Button variant="outline" onClick={togglePause}>
             {paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
             {paused ? t.player.resume : t.player.pause}
+          </Button>
+        )}
+        {roomId && openSeat !== undefined && (
+          <Button onClick={() => client?.takeSeat(openSeat)}>
+            <Gamepad2 data-icon="inline-start" />
+            {t.player.takeSeat(openSeat + 1)}
           </Button>
         )}
         {(!roomId || (playingSeat && isHost)) && (

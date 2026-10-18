@@ -53,6 +53,8 @@ interface ActiveGame {
   delay: number;
   seats: number[];
   activeNodeId: string | null;
+  /** Seats of the game nobody plays; the first seat's player stands in for them. */
+  vacant?: number[];
 }
 
 /** Snapshot/input history stays in memory; running inputs keep the object awake. */
@@ -62,6 +64,10 @@ interface Game extends ActiveGame {
   /** `loaded`: a state seat `seat` loaded at `f` (its NETPLAY_LOAD there is already applied). */
   snapshot: { f: number; s: string; loaded?: boolean; seat?: number } | null;
   log: [seat: number, frame: number, mask: number][];
+  /** seat -> newest frame logged for it, to pick up from when it falls vacant. */
+  lastInput: Map<number, number>;
+  /** A spectator taking a vacant seat, while the stand-in finishes (see `handover`). */
+  handover: { id: string; seat: number } | null;
 }
 
 /**
@@ -104,8 +110,8 @@ export class Room extends DurableObject<Env> {
         // History saved while someone was reconnecting lets them (and spectators) resume right away.
         const history = await ctx.storage.get<Pick<Game, "snapshot" | "log">>("gameHistory");
         this.game = history
-          ? { ...active, historyComplete: true, snapshot: history.snapshot, log: history.log }
-          : { ...active, historyComplete: false, snapshot: null, log: [] };
+          ? { ...active, historyComplete: true, snapshot: history.snapshot, log: history.log, lastInput: new Map(), handover: null }
+          : { ...active, historyComplete: false, snapshot: null, log: [], lastInput: new Map(), handover: null };
       } else if (this.started) {
         // Old deployments persisted only started, without enough data to resume.
         this.started = false;
@@ -233,12 +239,18 @@ export class Room extends DurableObject<Env> {
         break;
       case "input":
         if (this.playing(me) && isFrame(message.f) && isMask(message.m)) {
-          this.logInput(me.seat, message.f, message.m);
+          // Standing in for a vacant seat: only the first seat's player, only while it is vacant.
+          const seat = message.s === undefined ? me.seat : message.s;
+          if (seat !== me.seat && !(me.seat === this.game?.seats[0] && this.game.vacant?.includes(seat))) break;
+          this.logInput(seat, message.f, message.m);
           // While someone is reconnecting, keep the history they will resume from safe.
           if (this.pending.size > 0) await this.saveHistory();
-          const a = Number.isInteger(message.a) ? message.a : undefined;
-          this.broadcast({ t: "input", s: me.seat, f: message.f, m: message.m, a }, ws);
+          const a = seat === me.seat && Number.isInteger(message.a) ? message.a : undefined;
+          this.broadcast({ t: "input", s: seat, f: message.f, m: message.m, a }, ws);
         }
+        break;
+      case "handedOver":
+        if (this.playing(me) && isFrame(message.f) && Number.isInteger(message.s)) await this.handedOver(me, message.s, message.f);
         break;
       case "hash":
         if (this.playing(me) && isFrame(message.f) && Number.isInteger(message.h)) {
@@ -309,17 +321,92 @@ export class Room extends DurableObject<Env> {
 
   /** A player is gone for good: end their game, hand on the host role. */
   private async dropped(me: Attachment) {
-    // A seated player leaving ends the game: it cannot continue without them.
-    if (me.seat !== null && this.started && this.game?.seats.includes(me.seat)) {
-      this.started = false;
-      this.game = null;
-      await this.ctx.storage.put({ started: false, activeGame: null });
-      await this.ctx.storage.delete("gameHistory");
+    const game = this.game;
+    if (me.seat !== null && this.started && game?.seats.includes(me.seat)) {
+      if (game.handover?.id === me.id) {
+        // Left before the stand-in handed the seat over: `handedOver` sends it back.
+        game.handover = null;
+      } else if (me.seat !== game.seats[0] && this.firstSeatPlayer()) {
+        // Another seat empties: the game goes on, and someone watching may take it.
+        await this.vacate(me.seat);
+      } else {
+        // Without the first seat the game cannot go on.
+        this.started = false;
+        this.game = null;
+        await this.ctx.storage.put({ started: false, activeGame: null });
+        await this.ctx.storage.delete("gameHistory");
+      }
     }
     if (me.id === this.hostId) {
       this.hostId = this.players()[0]?.id ?? [...this.pending.values()][0]?.id ?? null;
       await this.ctx.storage.put("hostId", this.hostId);
     }
+  }
+
+  /** The first seat's player, still connected or about to reconnect. */
+  private firstSeatPlayer(): Attachment | null {
+    const first = this.game?.seats[0];
+    return [...this.players(), ...this.pending.values()].find((p) => p.seat === first) ?? null;
+  }
+
+  private async saveActiveGame() {
+    const game = this.game;
+    if (!game) return;
+    const active: ActiveGame = { id: game.id, delay: game.delay, seats: game.seats, activeNodeId: game.activeNodeId, vacant: game.vacant };
+    await this.ctx.storage.put("activeGame", active);
+  }
+
+  /** Seat `seat` has nobody now: the first seat's player fills it in from its last logged frame. */
+  private async vacate(seat: number) {
+    const game = this.game!;
+    game.vacant = [...new Set([...(game.vacant ?? []), seat])];
+    await this.saveActiveGame();
+    const last = game.lastInput.get(seat);
+    this.sendToFirstSeat({ t: "standIn", s: seat, f: last === undefined ? undefined : last + 1 });
+  }
+
+  private sendToFirstSeat(message: ServerMessage) {
+    const first = this.game?.seats[0];
+    const ws = this.ctx.getWebSockets().find((socket) => this.player(socket)?.seat === first);
+    if (ws) this.send(ws, message);
+  }
+
+  /**
+   * A spectator sits in a vacant seat of the running game. The stand-in stops
+   * first and reports where (`handedOver`), so the room's log is complete before
+   * the newcomer joins from it, as someone rejoining would.
+   */
+  private takeOver(ws: WebSocket, me: Attachment, seat: number) {
+    const game = this.game!;
+    if (!game.vacant?.includes(seat) || game.handover) return this.send(ws, { t: "error", code: "seatTaken" });
+    if (me.seat !== null) return this.send(ws, { t: "error", code: "seatLocked" });
+    if (me.romHash !== this.info!.romHash) return this.send(ws, { t: "error", code: "romMismatch" });
+    if (!this.ctx.getWebSockets().some((socket) => this.player(socket)?.seat === game.seats[0])) {
+      return this.send(ws, { t: "error", code: "playerReconnecting" });
+    }
+    me.seat = seat;
+    ws.serializeAttachment(me);
+    game.handover = { id: me.id, seat };
+    this.sendToFirstSeat({ t: "handover", s: seat });
+    this.broadcast({ t: "room", room: this.state() });
+  }
+
+  private async handedOver(me: Attachment, seat: number, frame: number) {
+    const game = this.game!;
+    if (me.seat !== game.seats[0] || !game.vacant?.includes(seat)) return;
+    const handover = game.handover?.seat === seat ? game.handover : null;
+    const ws = handover && this.ctx.getWebSockets().find((socket) => this.player(socket)?.id === handover.id);
+    const newcomer = ws && this.player(ws);
+    if (!newcomer) {
+      // They left meanwhile: keep standing in.
+      game.handover = null;
+      return this.sendToFirstSeat({ t: "standIn", s: seat, f: frame + 1 });
+    }
+    game.handover = null;
+    game.vacant = game.vacant.filter((s) => s !== seat);
+    await this.saveActiveGame();
+    this.broadcast({ t: "room", room: this.state() });
+    this.sendGameInProgress(ws, newcomer);
   }
 
   private async saveHistory() {
@@ -413,11 +500,15 @@ export class Room extends DurableObject<Env> {
       seats: game.seats,
       from: game.snapshot ? { f: game.snapshot.f, s: game.snapshot.s, loaded: game.snapshot.loaded } : undefined,
       inputs: game.log,
+      vacant: game.vacant ?? [],
     });
   }
 
   private takeSeat(ws: WebSocket, me: Attachment, seat: unknown) {
-    if (this.started) return this.send(ws, { t: "error", code: "seatLocked" });
+    if (this.started) {
+      if (!Number.isInteger(seat) || !this.game) return this.send(ws, { t: "error", code: "seatLocked" });
+      return this.takeOver(ws, me, seat as number);
+    }
     if (seat === null) {
       me.seat = null;
     } else {
@@ -444,10 +535,13 @@ export class Room extends DurableObject<Env> {
     // HTTP probes do not prove that a relay can authenticate. Keep enough delay
     // for the established room/direct route even if relay admission later fails.
     const delay = chooseNetplayDelay(seated);
-    const seats = seated.map((p) => p.seat!).sort((a, b) => a - b);
+    const taken = seated.map((p) => p.seat!).sort((a, b) => a - b);
+    // With 1P there, every seat plays: empty ones are stood in for until someone sits down.
+    const seats = taken[0] === 0 ? Array.from({ length: NETPLAY_SEATS }, (_, seat) => seat) : taken;
+    const vacant = seats.filter((seat) => !taken.includes(seat));
     this.activeNodeId = activeNodeId;
-    const active: ActiveGame = { id: crypto.randomUUID(), delay, seats, activeNodeId };
-    this.game = { ...active, historyComplete: true, snapshot: null, log: [] };
+    const active: ActiveGame = { id: crypto.randomUUID(), delay, seats, activeNodeId, vacant };
+    this.game = { ...active, historyComplete: true, snapshot: null, log: [], lastInput: new Map(), handover: null };
     this.started = true;
     this.hashes.clear();
     await this.ctx.storage.put({ started: true, activeGame: active });
@@ -456,7 +550,7 @@ export class Room extends DurableObject<Env> {
       if (player?.awaitingSnapshot) { player.awaitingSnapshot = false; socket.serializeAttachment(player); }
     }
     this.broadcast({ t: "room", room: this.state() });
-    this.broadcast({ t: "start", delay, seats });
+    this.broadcast({ t: "start", delay, seats, vacant });
   }
 
   private async leave(ws: WebSocket, intentional: boolean) {
@@ -468,7 +562,9 @@ export class Room extends DurableObject<Env> {
       // Already closed.
     }
     if (!me) return;
-    if (me.seat !== null && !intentional) {
+    // Someone still waiting to take over a seat has nothing to come back to.
+    const handingOver = this.game?.handover?.id === me.id;
+    if (me.seat !== null && !intentional && !handingOver) {
       // Dropped, not left: keep their seat (and the game) for a while so they can come back.
       this.pending.set(me.id, { ...me, until: Date.now() + NETPLAY_RECONNECT_GRACE_MS });
       await this.ctx.storage.put("pending", [...this.pending.values()]);
@@ -491,8 +587,10 @@ export class Room extends DurableObject<Env> {
   }
 
   private logInput(seat: number, frame: number, mask: number) {
-    const log = this.game?.log;
-    if (log && log.length < MAX_LOGGED_INPUTS) log.push([seat, frame, mask]);
+    const game = this.game;
+    if (!game) return;
+    if (game.log.length < MAX_LOGGED_INPUTS) game.log.push([seat, frame, mask]);
+    game.lastInput.set(seat, Math.max(game.lastInput.get(seat) ?? -1, frame));
   }
 
   private storeSnapshot(seat: number, frame: number, state: string) {
@@ -572,6 +670,7 @@ export class Room extends DurableObject<Env> {
       info: this.info!,
       hostId: this.hostId,
       started: this.started,
+      vacantSeats: this.started ? (this.game?.vacant ?? []).filter((seat) => this.game?.handover?.seat !== seat) : [],
       relay: { nodes, selection: this.selection, recommendedNodeId,
         activeNodeId: this.started ? this.activeNodeId : this.selection.mode === "auto" ? recommendedNodeId : this.selection.nodeId },
       players: players.map(({ id, name, seat, romHash, rttMs, directRttMs, relayProbes, connected }) => ({

@@ -12,6 +12,8 @@ export interface RollbackHost {
   hash(): number;
 }
 
+/** Remote inputs `recentInput` remembers: a few seconds for two players. */
+const RECENT_INPUTS = 512;
 /** Most frames the session will run past the last fully confirmed one. */
 export const MAX_ROLLBACK = 8;
 /** Slots needed: one per speculative frame, plus the confirmed one before them. */
@@ -61,6 +63,8 @@ export class RollbackSession {
   private rollbackFrom: number | null = null;
   /** Where local play picks up after a resume (see `resume`). */
   private resumeAt = 0;
+  /** Remote inputs received lately, kept past finalizing (see `recentInput`). */
+  private readonly recent = new Map<string, number>();
   private remoteAdvantage = 0;
   private sinceYield = 0;
   private readonly stats: RollbackStats = { rollbacks: 0, replayedFrames: 0 };
@@ -112,6 +116,8 @@ export class RollbackSession {
     const inputs = this.confirmed.get(seat);
     if (!inputs || inputs.has(frame) || frame <= this.contiguous.get(seat)!) return;
     inputs.set(frame, mask);
+    this.recent.set(`${seat}:${frame}`, mask);
+    if (this.recent.size > RECENT_INPUTS) this.recent.delete(this.recent.keys().next().value!);
     this.newest.set(seat, Math.max(this.newest.get(seat)!, frame));
     let contiguous = this.contiguous.get(seat)!;
     while (inputs.has(contiguous + 1)) contiguous++;
@@ -170,9 +176,20 @@ export class RollbackSession {
       this.runFrame(this.next, true);
       this.next++;
       ran++;
+      // As we go: hashes and save slots only hold the last few frames.
+      this.finalize();
     }
     this.finalize();
     return ran;
+  }
+
+  /**
+   * A remote seat's input for `frame`, if it arrived lately (the last few
+   * seconds), even if that frame is final: for handing the room inputs it
+   * missed when that player dropped.
+   */
+  recentInput(seat: number, frame: number): number | undefined {
+    return this.recent.get(`${seat}:${frame}`);
   }
 
   /** The other player's view of how far ahead of us they are, for time sync. */

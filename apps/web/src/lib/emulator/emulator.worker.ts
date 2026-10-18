@@ -68,6 +68,11 @@ let pendingLoad: Uint8Array | null = null;
 const loads = new Map<number, Map<number, Uint8Array>>();
 /** The game started from a state loaded at this frame: loads logged there are already in it. */
 let loadedAt: number | null = null;
+/**
+ * Vacant seats we fill in with neutral input (as the first seat's player),
+ * each with the next frame to fill. See ServerMessage "standIn".
+ */
+const standingIn = new Map<number, number>();
 /** Newest frame whose reset or load was announced, so re-running it in a rollback stays quiet. */
 let announcedThrough = -1;
 /** Netplay frames the clock says are due but that could not run yet. */
@@ -247,12 +252,50 @@ function tickPlayer(session: RollbackSession, due: number): boolean {
     } else if (pendingLoad) {
       loads.get(target)?.delete(session.localSeat);
     }
+    fillVacantSeats(session);
     owedFrames--;
     ran++;
   }
   if (owedFrames > 0) netWaits++;
   sendPeerPacket(session);
   return ran > 0 || replayed > 0;
+}
+
+/** Neutral input for the seats we stand in for, up to the newest frame of our own. */
+function fillVacantSeats(session: RollbackSession) {
+  const through = session.receivedThrough(session.localSeat);
+  for (const [seat, next] of standingIn) {
+    for (let f = next; f <= through; f++) {
+      session.receive(seat, f, 0);
+      link!.sendInput(f, 0, undefined, seat);
+    }
+    standingIn.set(seat, Math.max(next, through + 1));
+  }
+}
+
+/**
+ * `seat` fell vacant (its player left): fill it in from `from`, or from right
+ * after its newest input we hold. Inputs of theirs we got directly but the
+ * room missed (they dropped mid-send) go to the room first, so its log has no gap.
+ */
+function standIn(seat: number, from: number | undefined) {
+  const session = link?.session;
+  if (!(session instanceof RollbackSession) || session.localSeat !== session.activeSeats[0] || seat === session.localSeat) return;
+  const through = session.receivedThrough(seat);
+  for (let f = from ?? through + 1; f <= through; f++) link!.sendInput(f, session.recentInput(seat, f) ?? 0, undefined, seat);
+  standingIn.set(seat, through + 1);
+  // Their last word on time sync no longer applies.
+  session.receiveAdvantage(0);
+  fillVacantSeats(session);
+}
+
+/** Someone sat down in `seat`: stop filling it and tell the room the last frame we did. */
+function handOver(seat: number) {
+  const session = link?.session;
+  if (!(session instanceof RollbackSession)) return;
+  const next = standingIn.get(seat) ?? session.receivedThrough(seat) + 1;
+  standingIn.delete(seat);
+  link!.sendHandedOver(seat, next - 1);
 }
 
 /**
@@ -422,6 +465,7 @@ function startGame(game: GameStart): NetSession | null {
   peerHistory.clear();
   resetPending = false;
   pendingLoad = null;
+  standingIn.clear();
   loads.clear();
   loadedAt = game.snapshotLoaded ? game.startFrame : null;
   announcedThrough = game.startFrame - 1;
@@ -459,6 +503,11 @@ function startGame(game: GameStart): NetSession | null {
       peerHistory.push(f, m);
     }
     rollback.catchUp();
+    // As the first seat, fill in the seats nobody plays, from where the room's log leaves off.
+    if (game.localSeat === game.seats[0]) {
+      for (const seat of game.vacant) standingIn.set(seat, rollback.receivedThrough(seat) + 1);
+      fillVacantSeats(rollback);
+    }
     session = rollback;
   }
   post({ type: "netStarted", seat: game.localSeat, delay: game.delay });
@@ -496,6 +545,8 @@ function joinRoom(
     onCredentials: (credentials) => post({ type: "netCredentials", ...credentials }),
     onReaction: (from, kind) => post({ type: "netReaction", from, kind }),
     onLoad: (seat, loadFrame, data) => addLoad(seat, loadFrame, fromBase64(data)),
+    onStandIn: standIn,
+    onHandover: handOver,
   }, simulated, resume);
 }
 
