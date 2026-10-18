@@ -39,6 +39,7 @@ interface NetView {
   rttMs: number | null;
   /** Input delay of the running game, in frames. */
   delayFrames: number | null;
+  relayStatus: Extract<NetEvent, { type: "netRelayStatus" }> | null;
 }
 
 const INITIAL_NET: NetView = {
@@ -50,6 +51,7 @@ const INITIAL_NET: NetView = {
   notice: null,
   rttMs: null,
   delayFrames: null,
+  relayStatus: null,
 };
 
 function applyNetEvent(view: NetView, event: NetEvent): NetView {
@@ -63,7 +65,9 @@ function applyNetEvent(view: NetView, event: NetEvent): NetView {
     case "netPing":
       return { ...view, rttMs: event.rttMs };
     case "netEnded":
-      return { ...view, playing: false, seat: null, notice: event.reason };
+      return { ...view, playing: false, seat: null, notice: event.reason, relayStatus: null };
+    case "netRelayStatus":
+      return { ...view, relayStatus: event };
     default:
       return view;
   }
@@ -202,6 +206,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
               net.delayFrames !== null &&
               ` · ${t.player.inputDelay(net.delayFrames, NES_FRAME_RATE)}`}
             {net.playing && net.seat !== null && ` · ${peerLabel(t, peer)}`}
+            {net.playing && net.relayStatus && ` · ${t.nodes.connection(net.room?.relay?.nodes.find((node) => node.id === net.relayStatus?.nodeId)?.name ?? "", net.relayStatus.state, net.relayStatus.rttMs)}`}
           </span>
         )}
         <span
@@ -233,6 +238,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
             notice={net.notice}
             onStart={() => client?.startRoom()}
             onSeat={(seat) => client?.takeSeat(seat)}
+            onRelaySelect={(selection) => client?.selectRelay(selection)}
           />
         )}
         {message && (

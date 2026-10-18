@@ -1,0 +1,10 @@
+{
+  "name": "@neslink/relay-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "dependencies": { "@neslink/core": "workspace:*", "jose": "^6.1.0" },
+  "devDependencies": { "typescript": "^5", "vitest": "^5.0.5" }
+}

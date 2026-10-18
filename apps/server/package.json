@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@neslink/relay-auth": "workspace:*",
     "@neslink/core": "workspace:*"
   },
   "devDependencies": {

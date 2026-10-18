@@ -7,10 +7,12 @@ import {
   type NetStatus,
   type RoomEndReason,
   type RoomState,
+  type RelaySelection,
 } from "@neslink/core";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
 import { roomLink } from "@/lib/rooms";
+import { RelaySelector } from "./relay-selector";
 
 interface Props {
   status: NetStatus;
@@ -21,10 +23,11 @@ interface Props {
   onStart: () => void;
   /** Sit in a seat, or stand up to spectate (null). */
   onSeat: (seat: number | null) => void;
+  onRelaySelect: (selection: RelaySelection) => void;
 }
 
 /** Overlay on the game screen while a room waits for players or between games. */
-export function RoomLobby({ status, room, you, notice, onStart, onSeat }: Props) {
+export function RoomLobby({ status, room, you, notice, onStart, onSeat, onRelaySelect }: Props) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const me = room?.players.find((p) => p.id === you) ?? null;
@@ -50,7 +53,7 @@ export function RoomLobby({ status, room, you, notice, onStart, onSeat }: Props)
 
   return (
     <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/85 p-4 text-white">
-      <div className="flex w-full max-w-sm flex-col gap-4">
+      <div className="flex max-h-full w-full max-w-lg flex-col gap-4 overflow-y-auto">
         <div className="flex items-baseline justify-between gap-2">
           <p className="text-sm text-white/60">{t.lobby.room}</p>
           <p className="font-mono text-2xl tracking-widest">{room?.info.id ?? "······"}</p>
@@ -123,6 +126,7 @@ export function RoomLobby({ status, room, you, notice, onStart, onSeat }: Props)
           </p>
         )}
 
+        {room && <RelaySelector room={room} isHost={isHost} onSelect={onRelaySelect} />}
         {notice && <p className="text-sm text-amber-300">{t.roomEnded[notice]}</p>}
 
         <div className="flex gap-2">

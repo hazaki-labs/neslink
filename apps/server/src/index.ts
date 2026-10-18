@@ -10,6 +10,9 @@ export interface Env {
   /** Cloudflare Realtime TURN key; both are secrets, and TURN is off without them. */
   TURN_KEY_ID?: string;
   TURN_KEY_API_TOKEN?: string;
+  RELAY_NODES?: string;
+  RELAY_SIGNING_KEYS?: string;
+  RELAY_ALLOW_INSECURE?: string;
 }
 
 // Unambiguous characters only, since people read room codes to each other.
@@ -21,6 +24,17 @@ export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
 
+    const ticketMatch = url.pathname.match(/^\/api\/rooms\/([a-z0-9]{6})\/relay-ticket$/);
+    if (ticketMatch && request.method === "POST") {
+      if (request.headers.get("Origin") !== url.origin) return apiError("connectionDenied", 403);
+      let connectionToken: unknown;
+      try { ({ connectionToken } = await readSmallJson(request) as { connectionToken?: unknown }); }
+      catch { return apiError("badRequest", 400); }
+      if (typeof connectionToken !== "string" || connectionToken.length > 100) return apiError("connectionDenied", 403);
+      const result = await env.ROOMS.get(env.ROOMS.idFromName(ticketMatch[1])).relayTicket(connectionToken, url.origin);
+      return Response.json(result.body, { status: result.status, headers: { "Cache-Control": "no-store", "Pragma": "no-cache" } });
+    }
+
     if (url.pathname === "/api/rooms" && request.method === "POST") {
       return createRoom(request, env);
     }
@@ -29,7 +43,7 @@ export default {
       return turnServers(env);
     }
 
-    const match = url.pathname.match(/^\/api\/rooms\/([a-z0-9]+)(\/ws)?$/);
+    const match = url.pathname.match(/^\/api\/rooms\/([a-z0-9]{6})(\/ws)?$/);
     if (match) {
       const [, id, ws] = match;
       const room = env.ROOMS.get(env.ROOMS.idFromName(id));
@@ -47,7 +61,8 @@ export default {
 async function createRoom(request: Request, env: Env): Promise<Response> {
   let body: { romHash?: unknown; romName?: unknown };
   try {
-    body = await request.json();
+    body = await readSmallJson(request) as typeof body;
+    if (!body || typeof body !== "object") throw new Error("Invalid body");
   } catch {
     return apiError("badRequest", 400);
   }
@@ -68,4 +83,26 @@ function apiError(code: ApiErrorCode, status: number): Response {
 function randomId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(ID_LENGTH));
   return Array.from(bytes, (b) => ID_ALPHABET[b % ID_ALPHABET.length]).join("");
+}
+
+/** Enforce the limit on bytes read, including chunked bodies without Content-Length. */
+async function readSmallJson(request: Request): Promise<unknown> {
+  const limit = 1024;
+  if (Number(request.headers.get("Content-Length")) > limit || !request.body) throw new Error("Invalid body");
+  const reader = request.body.getReader();
+  const bytes = new Uint8Array(limit);
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > limit - size) {
+        void reader.cancel().catch(() => {});
+        throw new Error("Body too large");
+      }
+      bytes.set(value, size);
+      size += value.byteLength;
+    }
+  } finally { reader.releaseLock(); }
+  return JSON.parse(new TextDecoder().decode(bytes.subarray(0, size)));
 }

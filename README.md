@@ -74,6 +74,14 @@ TURN_KEY_ID=...
 TURN_KEY_API_TOKEN=...
 ```
 
+## Independent relay nodes
+
+The controller can advertise separately deployed input relays. Everyone in the
+lobby sees all players' node latency/jitter measurements; the host can select a
+node or use the automatic recommendation. Browsers obtain 30-second single-use
+connection tickets from the controller and connect directly to the selected
+node. See [configuration, deployment and security](docs/relay-nodes.md).
+
 ## Default controls
 
 | Button | Key |
