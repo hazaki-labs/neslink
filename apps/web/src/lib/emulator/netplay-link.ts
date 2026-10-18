@@ -9,7 +9,11 @@ import {
   type RollbackSession,
   type RoomState,
   type ServerMessage,
+  type PeerPacket,
+  type RelaySelection,
 } from "@neslink/core";
+import { probeRelays } from "../relay-probes";
+import { RelayLink, type RelayStatus } from "./relay-link";
 
 /** A seated player rolls back; a spectator follows confirmed inputs in lockstep. */
 export type NetSession = RollbackSession | LockstepSession;
@@ -42,6 +46,8 @@ export interface NetplayEvents {
   onPing(rttMs: number): void;
   /** WebRTC signaling from another player. */
   onSignal(from: string, data: unknown): void;
+  onRelayPacket(packet: PeerPacket): void;
+  onRelayStatus(status: RelayStatus): void;
 }
 
 /** Extra latency to simulate on this link (dev tool, from `?lag=` / `?swing=`). */
@@ -68,6 +74,11 @@ export class NetplayLink {
   private directRtt: number | null = null;
   private sendAt = 0;
   private receiveAt = 0;
+  private connectionToken: string | null = null;
+  private relay: RelayLink | null = null;
+  private probeTimer: ReturnType<typeof setInterval> | null = null;
+  private probing = false;
+  private readonly controlOrigin: string;
 
   constructor(
     url: string,
@@ -76,6 +87,9 @@ export class NetplayLink {
     private readonly simulated: SimulatedNetwork | null = null,
   ) {
     events.onStatus("connecting");
+    const base = new URL(url);
+    base.protocol = base.protocol === "wss:" ? "https:" : "http:";
+    this.controlOrigin = base.origin;
     this.ws = new WebSocket(url);
     this.ws.onopen = () => {
       events.onStatus("open");
@@ -91,6 +105,7 @@ export class NetplayLink {
       });
     this.ws.onclose = (event) => {
       this.stopPinging();
+      this.stopRelay();
       if (this.closed) return;
       this.closed = true;
       if (this.session) {
@@ -104,6 +119,9 @@ export class NetplayLink {
   requestStart(): void {
     this.send({ t: "start" });
   }
+
+  selectRelay(selection: RelaySelection): void { this.send({ t: "relaySelect", selection }); }
+  sendRelayPacket(packet: PeerPacket): void { this.relay?.send(packet); }
 
   /** Sit in `seat`, or stand up to spectate with null. Lobby only. */
   takeSeat(seat: number | null): void {
@@ -133,6 +151,7 @@ export class NetplayLink {
 
   close(): void {
     this.stopPinging();
+    this.stopRelay();
     this.closed = true;
     this.session = null;
     this.ws.close(1000, "leave");
@@ -160,13 +179,33 @@ export class NetplayLink {
   private stopPinging() {
     if (this.pingTimer !== null) clearInterval(this.pingTimer);
     this.pingTimer = null;
+    if (this.probeTimer !== null) clearInterval(this.probeTimer);
+    this.probeTimer = null;
+  }
+
+  private stopRelay() { this.relay?.close(); this.relay = null; }
+
+  private async probe() {
+    if (this.closed || this.probing || this.room?.started || !this.room?.relay?.nodes.length) return;
+    this.probing = true;
+    try {
+      const probes = await probeRelays(this.room.relay.nodes);
+      // Measure the actual room socket, not a nearby Worker edge HTTP response.
+      const rtts = [...this.rtts].sort((a, b) => a - b);
+      probes.unshift({ nodeId: "main", rttMs: rtts.length ? Math.round(rtts[rtts.length >> 1]) : null,
+        jitterMs: rtts.length ? Math.round(rtts[rtts.length - 1] - rtts[0]) : null });
+      if (!this.closed && !this.room?.started) this.send({ t: "relayProbes", probes });
+    } finally { this.probing = false; }
   }
 
   private onMessage(message: ServerMessage) {
     switch (message.t) {
       case "welcome":
         this.you = message.you;
+        this.connectionToken = message.connectionToken ?? null;
         this.updateRoom(message.room);
+        void this.probe();
+        this.probeTimer = setInterval(() => void this.probe(), 15_000);
         break;
       case "room":
         this.updateRoom(message.room);
@@ -183,6 +222,12 @@ export class NetplayLink {
           snapshot: message.from?.s ?? null,
         });
         for (const [s, f, m] of message.inputs ?? []) this.session?.receive(s, f, m);
+        this.stopRelay();
+        const node = this.room?.relay?.nodes.find((node) => node.id === this.room?.relay?.activeNodeId);
+        if (node && this.connectionToken && this.room) {
+          this.relay = new RelayLink(this.controlOrigin, this.room.info.id, this.connectionToken, node,
+            (packet) => this.events.onRelayPacket(packet), (status) => this.events.onRelayStatus(status));
+        }
         break;
       }
       case "input":
@@ -206,6 +251,7 @@ export class NetplayLink {
   private updateRoom(room: RoomState) {
     this.room = room;
     if (this.session && !room.started) {
+      this.stopRelay();
       this.session = null;
       this.events.onEnd("peerLeft");
     }

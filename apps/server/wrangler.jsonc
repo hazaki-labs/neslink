@@ -3,6 +3,9 @@
   "name": "neslink",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
+  // Public metadata only. Put per-node signing keys in the RELAY_SIGNING_KEYS secret.
+  // See docs/relay-nodes.md. Empty preserves the built-in room route.
+  "vars": { "RELAY_NODES": "[]" },
   // One Worker serves the built SPA and the API; only /api/* reaches the Worker code.
   "assets": {
     "directory": "../web/dist",

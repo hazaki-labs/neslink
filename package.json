@@ -3,6 +3,8 @@
   "private": true,
   "scripts": {
     "dev": "pnpm --parallel --filter @neslink/web --filter @neslink/server dev",
+    "dev:relay": "pnpm --filter @neslink/relay dev",
+    "test:integration": "pnpm build && pnpm --filter @neslink/relay exec tsx test/controller.integration.ts",
     "build:wasm": "pnpm --filter @neslink/nes-wasm build",
     "build": "pnpm --filter @neslink/web build",
     "lint": "pnpm -r lint",
