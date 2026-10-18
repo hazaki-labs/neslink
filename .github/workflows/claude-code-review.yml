@@ -31,6 +31,3 @@ jobs:
           plugins: "code-review@claude-code-plugins"
           prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
           claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
-          # Temporary: print Claude's output to find out why reviews post nothing.
-          # This repository is public, so remove it once the cause is known.
-          show_full_output: true
