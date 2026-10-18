@@ -92,7 +92,9 @@ export type FromWorker =
   | { type: "netCredentials"; id: string; token: string }
   | { type: "netReaction"; from: string; kind: ReactionKind }
   /** The host reset the netplay game (the console's reset button). */
-  | { type: "netReset" };
+  | { type: "netReset" }
+  /** A player in the netplay game loaded a save state, for everyone. */
+  | { type: "netLoaded"; seat: number };
 
 /** Messages from the worker to the AudioWorklet. `samples` is mono. */
 export type ToAudio = { type: "samples"; samples: Float32Array<ArrayBuffer> } | { type: "flush" };

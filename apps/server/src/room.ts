@@ -59,7 +59,8 @@ interface ActiveGame {
 interface Game extends ActiveGame {
   /** After object recovery, wait for a fresh snapshot before admitting spectators. */
   historyComplete: boolean;
-  snapshot: { f: number; s: string } | null;
+  /** `loaded`: a state seat `seat` loaded at `f` (its NETPLAY_LOAD there is already applied). */
+  snapshot: { f: number; s: string; loaded?: boolean; seat?: number } | null;
   log: [seat: number, frame: number, mask: number][];
 }
 
@@ -249,6 +250,11 @@ export class Room extends DurableObject<Env> {
           this.storeSnapshot(me.seat, message.f, message.s);
         }
         break;
+      case "load":
+        if (this.playing(me) && isFrame(message.f) && typeof message.s === "string" && message.s.length <= MAX_SNAPSHOT_CHARS) {
+          await this.loadState(ws, me.seat, message.f, message.s);
+        }
+        break;
       case "signal":
         if (me && typeof message.to === "string") this.relaySignal(me, message.to, message.data);
         break;
@@ -405,7 +411,7 @@ export class Room extends DurableObject<Env> {
       t: "start",
       delay: game.delay,
       seats: game.seats,
-      from: game.snapshot ?? undefined,
+      from: game.snapshot ? { f: game.snapshot.f, s: game.snapshot.s, loaded: game.snapshot.loaded } : undefined,
       inputs: game.log,
     });
   }
@@ -502,6 +508,26 @@ export class Room extends DurableObject<Env> {
       const me = this.player(ws);
       if (me?.awaitingSnapshot) this.sendGameInProgress(ws, me);
     }
+  }
+
+  /**
+   * A player loads a save state before frame `frame`. It becomes the snapshot
+   * newcomers start from (marked loaded, so they do not load it again), and
+   * goes to everyone else ahead of the input that applies it.
+   */
+  private async loadState(ws: WebSocket, seat: number, frame: number, state: string) {
+    const game = this.game;
+    if (!game) return;
+    const current = game.snapshot;
+    // Both loading on one frame: the higher seat's state wins, as on every client.
+    const newer = !current || frame > current.f || (frame === current.f && (!current.loaded || seat >= (current.seat ?? -1)));
+    if (newer) {
+      game.snapshot = { f: frame, s: state, loaded: true, seat };
+      game.historyComplete = true;
+      game.log = game.log.filter(([, f]) => f >= frame);
+      if (this.pending.size > 0) await this.saveHistory();
+    }
+    this.broadcast({ t: "load", s: seat, f: frame, data: state }, ws);
   }
 
   private checkHash(frame: number, seat: number, hash: number) {

@@ -5,6 +5,8 @@ import {
   NES_HEIGHT,
   NES_WIDTH,
   NETPLAY_HASH_INTERVAL,
+  NETPLAY_EVENTS,
+  NETPLAY_LOAD,
   NETPLAY_RESET,
   NETPLAY_SNAPSHOT_INTERVAL,
   MAX_ROLLBACK,
@@ -60,9 +62,14 @@ let peerPort: MessagePort | null = null;
 const peerHistory = new InputHistory();
 /** The host asked to reset the netplay game: our next input carries NETPLAY_RESET. */
 let resetPending = false;
-/** When the last netplay reset ran, so a rollback re-running it does not announce it again. */
-let lastResetAt = -Infinity;
-const RESET_NOTICE_MS = 2000;
+/** A save state to load in the netplay game: our next input carries NETPLAY_LOAD. */
+let pendingLoad: Uint8Array | null = null;
+/** frame -> seat -> save state that seat loads before that frame (until the frame is final). */
+const loads = new Map<number, Map<number, Uint8Array>>();
+/** The game started from a state loaded at this frame: loads logged there are already in it. */
+let loadedAt: number | null = null;
+/** Newest frame whose reset or load was announced, so re-running it in a rollback stays quiet. */
+let announcedThrough = -1;
 /** Netplay frames the clock says are due but that could not run yet. */
 let owedFrames = 0;
 let netWaits = 0;
@@ -119,14 +126,11 @@ function running() {
  * Run one frame. `live` frames are shown and heard; re-simulated (rollback)
  * and fast-forwarded frames are silent and not counted as displayed frames.
  */
-function step(frameInputs: readonly number[], live = true) {
+function step(frameInputs: readonly number[], live = true, frameNumber = -1) {
   const t0 = performance.now();
-  if (frameInputs.some((mask) => mask & NETPLAY_RESET)) {
-    // A netplay reset, on the same frame for everyone (see NETPLAY_RESET).
-    core!.reset();
-    if (t0 - lastResetAt > RESET_NOTICE_MS) post({ type: "netReset" });
-    lastResetAt = t0;
-    frameInputs = frameInputs.map((mask) => mask & ~NETPLAY_RESET);
+  if (frameInputs.some((mask) => mask & NETPLAY_EVENTS)) {
+    applyEvents(frameInputs, frameNumber);
+    frameInputs = frameInputs.map((mask) => mask & ~NETPLAY_EVENTS);
   }
   core!.runFrame(frameInputs);
   frameCostMs += (performance.now() - t0 - frameCostMs) * 0.05;
@@ -138,6 +142,38 @@ function step(frameInputs: readonly number[], live = true) {
   fpsFrames++;
   const samples = core!.drainAudio();
   if (samples.length > 0) postAudio({ type: "samples", samples }, [samples.buffer]);
+}
+
+/**
+ * A netplay reset or load on this frame, the same for everyone: a reset first,
+ * then loads in seat order (see NETPLAY_RESET, NETPLAY_LOAD).
+ */
+function applyEvents(frameInputs: readonly number[], frameNumber: number) {
+  const announce = frameNumber > announcedThrough;
+  if (announce) announcedThrough = frameNumber;
+  if (frameInputs.some((mask) => mask & NETPLAY_RESET)) {
+    core!.reset();
+    if (announce) post({ type: "netReset" });
+  }
+  frameInputs.forEach((mask, seat) => {
+    if (!(mask & NETPLAY_LOAD) || frameNumber === loadedAt) return;
+    const state = loads.get(frameNumber)?.get(seat);
+    if (!state) return;
+    core!.loadState(state);
+    if (announce) post({ type: "netLoaded", seat });
+  });
+}
+
+/** Keep `state` for `seat`'s load before `frame`. */
+function addLoad(seat: number, frame: number, state: Uint8Array) {
+  let seats = loads.get(frame);
+  if (!seats) loads.set(frame, (seats = new Map()));
+  seats.set(seat, state);
+}
+
+/** Whether an input can be accepted yet: a load needs its save state first. */
+function loadArrived(seat: number, frame: number, mask: number) {
+  return !(mask & NETPLAY_LOAD) || loads.get(frame)?.has(seat) === true;
 }
 
 /**
@@ -159,6 +195,13 @@ function render() {
   ctx!.putImageData(image!, 0, 0);
 }
 
+/** Run a spectator's next frame. Lockstep frames are final, so their loads can go. */
+function spectate(session: LockstepSession, live: boolean) {
+  const frameNumber = session.frame;
+  step(session.advance().inputs, live, frameNumber);
+  loads.delete(frameNumber);
+}
+
 /** A spectator follows the confirmed inputs; returns frames shown this refresh. */
 function tickSpectator(session: LockstepSession, due: number): number {
   let ran = 0;
@@ -166,13 +209,13 @@ function tickSpectator(session: LockstepSession, due: number): number {
   if (backlog > session.delay + SPECTATOR_SLACK) {
     // Behind the game: run ahead silently until close to live.
     const n = Math.min(CATCH_UP_FRAMES, backlog - session.delay);
-    for (; ran < n; ran++) step(session.advance().inputs, ran === n - 1);
+    for (; ran < n; ran++) spectate(session, ran === n - 1);
     owedFrames = 0;
     return ran;
   }
   owedFrames = Math.min(owedFrames + due, MAX_OWED);
   while (owedFrames > 0 && session.ready()) {
-    step(session.advance().inputs);
+    spectate(session, true);
     owedFrames--;
     ran++;
   }
@@ -188,13 +231,21 @@ function tickPlayer(session: RollbackSession, due: number): boolean {
   const replayed = session.resolve();
   let ran = 0;
   while (owedFrames > 0 && session.canAdvance()) {
-    const mask = localMask(session.frame) | (resetPending ? NETPLAY_RESET : 0);
+    const mask = localMask(session.frame) | (resetPending ? NETPLAY_RESET : 0) | (pendingLoad ? NETPLAY_LOAD : 0);
+    // Our input goes to this frame; a load's state must be in place before it runs.
+    const target = session.frame + session.delay;
+    if (pendingLoad) addLoad(session.localSeat, target, pendingLoad);
     const localFrame = session.advance(mask);
     // Null right after a rejoin, while frames whose input we already sent come round.
     if (localFrame !== null) {
+      // The state goes ahead of the input on the room socket, so nobody gets one without the other.
+      if (pendingLoad) link!.sendLoad(localFrame, toBase64(pendingLoad));
       link!.sendInput(localFrame, mask, session.localAdvantage());
       peerHistory.push(localFrame, mask);
       resetPending = false;
+      pendingLoad = null;
+    } else if (pendingLoad) {
+      loads.get(target)?.delete(session.localSeat);
     }
     owedFrames--;
     ran++;
@@ -214,21 +265,22 @@ function sendPeerPacket(session: RollbackSession) {
   const packet = peerHistory.packet(session.localSeat, session.localAdvantage(), session.receivedThrough(other));
   if (!packet) return;
   peerPort?.postMessage(packet);
-  // Relay nodes deployed before netplay reset drop the connection on a mask
-  // above 0xff. Leave the reset frame to the other paths; it is acked in a moment.
-  if (packet.t === "in" && packet.m.some((mask) => mask & NETPLAY_RESET)) return;
+  // Relay nodes deployed before netplay reset/load drop the connection on a mask
+  // above 0xff. Leave that frame to the other paths; it is acked in a moment.
+  if (packet.t === "in" && packet.m.some((mask) => mask & NETPLAY_EVENTS)) return;
   link?.sendRelayPacket(packet);
 }
 
 /** A packet from the other player over the direct link: same inputs as the server relays, sooner. */
 function onPeerPacket(packet: PeerPacket) {
   const session = link?.session;
+  // A load's state comes through the room; until it is here, wait for a resend.
   if (session instanceof LockstepSession && packet.t === "in") {
-    for (const [f, m] of unpackInputs(packet)) session.receive(packet.s, f, m);
+    for (const [f, m] of unpackInputs(packet)) if (loadArrived(packet.s, f, m)) session.receive(packet.s, f, m);
     return;
   }
   if (!(session instanceof RollbackSession) || packet.t !== "in" || packet.s === session.localSeat) return;
-  for (const [f, m] of unpackInputs(packet)) session.receive(packet.s, f, m);
+  for (const [f, m] of unpackInputs(packet)) if (loadArrived(packet.s, f, m)) session.receive(packet.s, f, m);
   if (Number.isInteger(packet.a)) session.receiveAdvantage(packet.a);
   if (Number.isInteger(packet.k)) peerHistory.acknowledge(packet.k);
 }
@@ -369,6 +421,10 @@ function startGame(game: GameStart): NetSession | null {
   owedFrames = 0;
   peerHistory.clear();
   resetPending = false;
+  pendingLoad = null;
+  loads.clear();
+  loadedAt = game.snapshotLoaded ? game.startFrame : null;
+  announcedThrough = game.startFrame - 1;
 
   let session: NetSession;
   if (game.localSeat === null) {
@@ -379,12 +435,14 @@ function startGame(game: GameStart): NetSession | null {
     const rollback = new RollbackSession(game.seats, game.localSeat, game.delay, {
       save: (slot) => emulator.saveSlot(slot),
       load: (slot) => emulator.loadSlot(slot),
-      run: (frameInputs, replay) => step(frameInputs, !replay),
+      run: (frameInputs, replay, frameNumber) => step(frameInputs, !replay, frameNumber),
       hash: () => emulator.stateHash(),
     }, game.startFrame);
     const uploadsSnapshots = game.localSeat === game.seats[0];
     rollback.onFinal = (final, hash) => {
       const next = final + 1;
+      // Final frames never run again, so their loads are done with.
+      loads.delete(final);
       if (next % NETPLAY_HASH_INTERVAL === 0) link!.sendHash(final, hash);
       // The first seat keeps the room's snapshot fresh for spectators who join late.
       if (uploadsSnapshots && next % NETPLAY_SNAPSHOT_INTERVAL === 0) {
@@ -437,6 +495,7 @@ function joinRoom(
     onRelayStatus: (status) => post({ type: "netRelayStatus", ...status }),
     onCredentials: (credentials) => post({ type: "netCredentials", ...credentials }),
     onReaction: (from, kind) => post({ type: "netReaction", from, kind }),
+    onLoad: (seat, loadFrame, data) => addLoad(seat, loadFrame, fromBase64(data)),
   }, simulated, resume);
 }
 
@@ -488,7 +547,11 @@ async function handle(message: ToWorker) {
     }
     case "loadState":
       if (!core || !romLoaded) throw new Error("No game running");
-      if (inNetGame()) break;
+      if (inNetGame()) {
+        // A seated player loads for everyone, through its next input; spectators cannot.
+        if (link!.session instanceof RollbackSession) pendingLoad = message.state;
+        break;
+      }
       core.loadState(message.state);
       render();
       break;
