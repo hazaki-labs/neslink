@@ -70,7 +70,9 @@ export function createRelay(config: RelayConfig) {
       ws.on("message", async (raw, binary) => {
         if (ws.readyState !== WebSocket.OPEN) return;
         if (Date.now() - windowStart >= 1000) { messages = 0; windowStart = Date.now(); }
-        if (++messages > 240 || binary) { ws.close(1008, "Invalid traffic"); return; }
+        // Client inputs are capped at 120 Hz; leave room for pings and bursts,
+        // including older clients running the 240 Hz timer fallback.
+        if (++messages > 512 || binary) { ws.close(1008, "Invalid traffic"); return; }
         let message: Record<string, unknown>;
         try { message = JSON.parse(raw.toString()); }
         catch { ws.close(1008, "Malformed message"); return; }

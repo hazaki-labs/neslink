@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { chooseRelayInputDelay, recommendRelay, type ProbePlayer } from "./relay";
+import { recommendRelay, type ProbePlayer } from "./relay";
+import { chooseNetplayDelay } from "./delay";
 
 const nodes = [{ id: "east", name: "East", url: "https://east.example" }, { id: "west", name: "West", url: "https://west.example" }];
 const player = (seat: number | null, main: number | null, east: number | null, west: number | null, jitter = 0): ProbePlayer => ({
@@ -24,10 +25,8 @@ describe("relay recommendation", () => {
     jittery.relayProbes![1].jitterMs = 50;
     expect(recommendRelay(nodes, [jittery])).toBe("west");
   });
-  it("uses a fast selected relay for input delay and retains fallback when it is unmeasured", () => {
+  it("keeps the fallback input delay even when an unauthenticated relay probes faster", () => {
     const players = [0, 1].map((seat) => ({ ...player(seat, 200, 10, 100), rttMs: 200, directRttMs: null }));
-    expect(chooseRelayInputDelay(players, "east")).toBe(1);
-    expect(chooseRelayInputDelay(players, null)).toBe(4);
-    expect(chooseRelayInputDelay(players, "unknown")).toBe(4);
+    expect(chooseNetplayDelay(players)).toBe(4);
   });
 });

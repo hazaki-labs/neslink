@@ -1,5 +1,3 @@
-import { chooseNetplayDelay, type PlayerLatency } from "./delay";
-
 export interface RelayNode { id: string; name: string; url: string }
 export interface RelayProbe { nodeId: string; rttMs: number | null; jitterMs: number | null }
 export interface RelaySelection { mode: "auto" | "manual"; nodeId: string | null }
@@ -28,14 +26,4 @@ export function recommendRelay(nodes: readonly RelayNode[], players: readonly Pr
     if (score < bestScore) { bestScore = score; best = id === "main" ? null : id; }
   }
   return best;
-}
-
-/** The selected relay can shorten the delay; fallback/direct routes remain available. */
-export function chooseRelayInputDelay(players: readonly (PlayerLatency & ProbePlayer)[], nodeId: string | null): number {
-  const fallback = chooseNetplayDelay(players);
-  if (!nodeId) return fallback;
-  const probes = players.map((player) => player.relayProbes?.find((probe) => probe.nodeId === nodeId));
-  if (probes.some((probe) => !probe || probe.rttMs === null)) return fallback;
-  const relayed = players.map((player, i) => ({ ...player, rttMs: probes[i]!.rttMs, directRttMs: null }));
-  return Math.min(fallback, chooseNetplayDelay(relayed));
 }

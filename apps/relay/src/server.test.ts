@@ -65,6 +65,21 @@ describe("standalone relay", () => {
     await expect(connect(token)).rejects.toThrow("1008");
     await expect(connect(await ticket(0, "11111111"))).resolves.toBeInstanceOf(WebSocket);
   });
+  it("accepts a 240 Hz client's inputs plus ping traffic and still rejects excessive traffic", async () => {
+    const a = await connect(await ticket(0, "11111111"));
+    const b = await connect(await ticket(1, "22222222"));
+    const end = new Promise<void>((resolve) => b.on("message", (raw) => {
+      if (JSON.parse(raw.toString()).f === 299) resolve();
+    }));
+    for (let f = 0; f < 300; f++) a.send(JSON.stringify({ t: "in", s: 0, f, m: [0], a: 0, k: -1 }));
+    await end;
+    const pong = receive(a);
+    a.send(JSON.stringify({ t: "ping", ts: 123 }));
+    expect(await pong).toEqual({ t: "pong", ts: 123 });
+    const rejected = closed(a);
+    for (let f = 300; f < 1000; f++) a.send(JSON.stringify({ t: "in", s: 0, f, m: [0], a: 0, k: -1 }));
+    expect(await rejected).toBe(1008);
+  });
   it("rejects tickets for a different node or room and spectator input", async () => {
     await expect(connect(await ticket(0, "11111111", "west"))).rejects.toThrow("1008");
     await expect(connect(await ticket(0, "11111111"), "ghjkmn")).rejects.toThrow("1008");

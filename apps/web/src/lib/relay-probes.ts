@@ -1,5 +1,12 @@
 import type { RelayNode, RelayProbe } from "@neslink/core/netplay";
 
+/** Both routes use the median and spread of their three most recent samples. */
+export function summarizeProbe(nodeId: string, samples: readonly number[]): RelayProbe {
+  if (samples.length < 3) return { nodeId, rttMs: null, jitterMs: null };
+  const sorted = samples.slice(-3).sort((a, b) => a - b);
+  return { nodeId, rttMs: Math.round(sorted[1]), jitterMs: Math.round(sorted[2] - sorted[0]) };
+}
+
 /** Public health requests; no ticket, cookies, or signing material is needed. */
 export async function probeRelays(nodes: readonly RelayNode[]): Promise<RelayProbe[]> {
   return Promise.all(nodes.map(async (node) => {
@@ -16,8 +23,6 @@ export async function probeRelays(nodes: readonly RelayNode[]): Promise<RelayPro
         if (i > 0) samples.push(performance.now() - start);
       } catch { /* Failed probes remain unavailable instead of looking fast. */ }
     }
-    if (samples.length < 3) return { nodeId: node.id, rttMs: null, jitterMs: null };
-    samples.sort((a, b) => a - b);
-    return { nodeId: node.id, rttMs: Math.round(samples[1]), jitterMs: Math.round(samples[2] - samples[0]) };
+    return summarizeProbe(node.id, samples);
   }));
 }
