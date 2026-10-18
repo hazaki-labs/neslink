@@ -9,8 +9,13 @@ import {
   type RoomPlayer,
   type RoomState,
   type ServerMessage,
+  type RelayProbe,
+  type RelaySelection,
+  recommendRelay,
 } from "@neslink/core/netplay";
 import type { Env } from "./index";
+import { relayKey, relayNodes } from "./relays";
+import { issueTicket } from "@neslink/relay-auth";
 
 /** A room with nobody connected is forgotten after this long. */
 const IDLE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -25,16 +30,24 @@ const MAX_SIGNAL_CHARS = 32 * 1024;
 /** Per-socket player data. Stored on the socket so it survives hibernation. */
 interface Attachment extends RoomPlayer {
   joinedAt: number;
+  connectionToken: string;
+  ticketAt: number;
+  probedAt: number;
+  awaitingSnapshot?: boolean;
 }
 
-/**
- * What a spectator needs to join a game in progress: the latest snapshot and
- * every input since it. Kept in memory only; a running game keeps the object
- * awake, since inputs arrive every frame.
- */
-interface Game {
+/** Persisted at start so tickets keep the same scope after object recovery. */
+interface ActiveGame {
+  id: string;
   delay: number;
   seats: number[];
+  activeNodeId: string | null;
+}
+
+/** Snapshot/input history stays in memory; running inputs keep the object awake. */
+interface Game extends ActiveGame {
+  /** After object recovery, wait for a fresh snapshot before admitting spectators. */
+  historyComplete: boolean;
   snapshot: { f: number; s: string } | null;
   log: [seat: number, frame: number, mask: number][];
 }
@@ -54,6 +67,8 @@ export class Room extends DurableObject<Env> {
   private hostId: string | null = null;
   private started = false;
   private game: Game | null = null;
+  private selection: RelaySelection = { mode: "auto", nodeId: null };
+  private activeNodeId: string | null = null;
   /** frame -> seat -> hash, until every seat has reported that frame. */
   private readonly hashes = new Map<number, Map<number, number>>();
 
@@ -65,6 +80,17 @@ export class Room extends DurableObject<Env> {
       this.info = (await ctx.storage.get<RoomInfo>("info")) ?? null;
       this.hostId = (await ctx.storage.get<string>("hostId")) ?? null;
       this.started = (await ctx.storage.get<boolean>("started")) ?? false;
+      this.selection = (await ctx.storage.get<RelaySelection>("relaySelection")) ?? this.selection;
+      const active = await ctx.storage.get<ActiveGame>("activeGame");
+      if (this.started && active) {
+        this.activeNodeId = active.activeNodeId;
+        this.game = { ...active, historyComplete: false, snapshot: null, log: [] };
+      } else if (this.started) {
+        // Old deployments persisted only started, without enough data to resume.
+        this.started = false;
+        await ctx.storage.put("started", false);
+        this.broadcast({ t: "room", room: this.state() });
+      }
     });
   }
 
@@ -81,6 +107,27 @@ export class Room extends DurableObject<Env> {
     return this.info;
   }
 
+  /** Only a live room connection can request a ticket; its token is never broadcast. */
+  async relayTicket(connectionToken: string, origin: string) {
+    const ws = this.ctx.getWebSockets().find((socket) => this.player(socket)?.connectionToken === connectionToken);
+    const me = ws && this.player(ws);
+    if (!this.info || !me || !this.started || !this.game) return { status: 403, body: { error: "connectionDenied" } };
+    const node = relayNodes(this.env).find((node) => node.id === this.activeNodeId);
+    if (!node) return { status: 409, body: { error: "relayUnavailable" } };
+    const now = Date.now();
+    if (now - me.ticketAt < 2000) return { status: 429, body: { error: "tooManyRequests" } };
+    me.ticketAt = now;
+    ws!.serializeAttachment(me);
+    try {
+      const grant = await issueTicket(node.id, this.info, origin, relayKey(this.env, node.id), {
+        playerId: me.id, seat: me.seat, gameId: this.game.id,
+      });
+      return { status: 200, body: { ...grant, node } };
+    } catch {
+      return { status: 503, body: { error: "relayUnavailable" } };
+    }
+  }
+
   async fetch(request: Request): Promise<Response> {
     if (!this.info) return new Response("Room not found", { status: 404 });
     if (request.headers.get("Upgrade") !== "websocket") {
@@ -95,6 +142,9 @@ export class Room extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
+    if ((typeof data === "string" ? data.length : data.byteLength) > 600_000) {
+      ws.close(1009, "Message too large"); return;
+    }
     let message: ClientMessage;
     try {
       message = JSON.parse(typeof data === "string" ? data : new TextDecoder().decode(data));
@@ -103,7 +153,39 @@ export class Room extends DurableObject<Env> {
     }
     const me = this.player(ws);
 
+    if (!message || typeof message !== "object" || typeof message.t !== "string") {
+      return this.send(ws, { t: "error", code: "malformed" });
+    }
+
     switch (message.t) {
+      case "relaySelect":
+        if (!me) break;
+        if (me.id !== this.hostId) return this.send(ws, { t: "error", code: "notHost" });
+        if (this.started) return this.send(ws, { t: "error", code: "nodeLocked" });
+        if (!message.selection || !["auto", "manual"].includes(message.selection.mode) ||
+            (message.selection.nodeId !== null && !relayNodes(this.env).some((node) => node.id === message.selection.nodeId))) {
+          return this.send(ws, { t: "error", code: "malformed" });
+        }
+        this.selection = { mode: message.selection.mode, nodeId: message.selection.mode === "auto" ? null : message.selection.nodeId };
+        await this.ctx.storage.put("relaySelection", this.selection);
+        this.broadcast({ t: "room", room: this.state() });
+        break;
+      case "relayProbes": {
+        if (!me || this.started || Date.now() - me.probedAt < 4000) break;
+        const allowed = new Set(["main", ...relayNodes(this.env).map((node) => node.id)]);
+        if (!Array.isArray(message.probes) || message.probes.length > allowed.size) break;
+        const probes: RelayProbe[] = [];
+        for (const probe of message.probes) {
+          if (!probe || !allowed.delete(probe.nodeId) ||
+              (probe.rttMs !== null && (!Number.isFinite(probe.rttMs) || probe.rttMs < 0 || probe.rttMs > 10_000)) ||
+              (probe.jitterMs !== null && (!Number.isFinite(probe.jitterMs) || probe.jitterMs < 0 || probe.jitterMs > 10_000))) return;
+          probes.push({ nodeId: probe.nodeId, rttMs: probe.rttMs, jitterMs: probe.jitterMs });
+        }
+        me.relayProbes = probes; me.probedAt = Date.now();
+        ws.serializeAttachment(me);
+        this.broadcast({ t: "room", room: this.state() });
+        break;
+      }
       case "hello":
         if (!me) await this.join(ws, message.name, message.romHash);
         break;
@@ -177,13 +259,16 @@ export class Room extends DurableObject<Env> {
       rttMs: null,
       directRttMs: null,
       joinedAt: Date.now(),
+      connectionToken: crypto.randomUUID() + crypto.randomUUID(),
+      ticketAt: 0,
+      probedAt: 0,
     };
     ws.serializeAttachment(me);
     if (!this.hostId || !this.players().some((p) => p.id === this.hostId)) {
       this.hostId = me.id;
       await this.ctx.storage.put("hostId", me.id);
     }
-    this.send(ws, { t: "welcome", you: me.id, room: this.state() });
+    this.send(ws, { t: "welcome", you: me.id, room: this.state(), connectionToken: me.connectionToken });
     this.broadcast({ t: "room", room: this.state() }, ws);
     if (this.started) this.sendGameInProgress(ws, me);
   }
@@ -195,6 +280,13 @@ export class Room extends DurableObject<Env> {
     if (!game || game.log.length >= MAX_LOGGED_INPUTS) {
       return this.send(ws, { t: "error", code: "lateJoinUnavailable" });
     }
+    if (!game.historyComplete) {
+      me.awaitingSnapshot = true;
+      ws.serializeAttachment(me);
+      return;
+    }
+    me.awaitingSnapshot = false;
+    ws.serializeAttachment(me);
     this.send(ws, {
       t: "start",
       delay: game.delay,
@@ -227,12 +319,21 @@ export class Room extends DurableObject<Env> {
     if (seated.length === 0) return this.send(ws, { t: "error", code: "noPlayers" });
     // Players roll back, so a small delay (from latency measured now, over a
     // direct link if both have one) is enough; prediction covers the rest.
+    const activeNodeId = this.state().relay!.activeNodeId;
+    // HTTP probes do not prove that a relay can authenticate. Keep enough delay
+    // for the established room/direct route even if relay admission later fails.
     const delay = chooseNetplayDelay(seated);
     const seats = seated.map((p) => p.seat!).sort((a, b) => a - b);
-    this.game = { delay, seats, snapshot: null, log: [] };
+    this.activeNodeId = activeNodeId;
+    const active: ActiveGame = { id: crypto.randomUUID(), delay, seats, activeNodeId };
+    this.game = { ...active, historyComplete: true, snapshot: null, log: [] };
     this.started = true;
     this.hashes.clear();
-    await this.ctx.storage.put("started", true);
+    await this.ctx.storage.put({ started: true, activeGame: active });
+    for (const socket of this.ctx.getWebSockets()) {
+      const player = this.player(socket);
+      if (player?.awaitingSnapshot) { player.awaitingSnapshot = false; socket.serializeAttachment(player); }
+    }
     this.broadcast({ t: "room", room: this.state() });
     this.broadcast({ t: "start", delay, seats });
   }
@@ -251,7 +352,7 @@ export class Room extends DurableObject<Env> {
     if (me.seat !== null && this.started) {
       this.started = false;
       this.game = null;
-      await this.ctx.storage.put("started", false);
+      await this.ctx.storage.put({ started: false, activeGame: null });
     }
     if (me.id === this.hostId) {
       this.hostId = this.players()[0]?.id ?? null;
@@ -282,8 +383,13 @@ export class Room extends DurableObject<Env> {
     if (!game || seat !== game.seats[0] || state.length > MAX_SNAPSHOT_CHARS) return;
     if (game.snapshot && frame <= game.snapshot.f) return;
     game.snapshot = { f: frame, s: state };
+    game.historyComplete = true;
     // Inputs before the snapshot are inside it now.
     game.log = game.log.filter(([, f]) => f >= frame);
+    for (const ws of this.ctx.getWebSockets()) {
+      const me = this.player(ws);
+      if (me?.awaitingSnapshot) this.sendGameInProgress(ws, me);
+    }
   }
 
   private checkHash(frame: number, seat: number, hash: number) {
@@ -291,6 +397,7 @@ export class Room extends DurableObject<Env> {
     let reports = this.hashes.get(frame);
     if (!reports) this.hashes.set(frame, (reports = new Map()));
     reports.set(seat, hash);
+    if (this.hashes.size > 120) this.hashes.delete(this.hashes.keys().next().value!);
     if (reports.size < players) return;
     this.hashes.delete(frame);
     if (new Set(reports.values()).size > 1) this.broadcast({ t: "desync", f: frame });
@@ -314,17 +421,26 @@ export class Room extends DurableObject<Env> {
   }
 
   private state(): RoomState {
+    const nodes = relayNodes(this.env);
+    const players = this.players().map((player) => ({
+      ...player,
+      relayProbes: Date.now() - (player.probedAt ?? 0) < 45_000 ? player.relayProbes ?? [] : [],
+    }));
+    const recommendedNodeId = recommendRelay(nodes, players);
     return {
       info: this.info!,
       hostId: this.hostId,
       started: this.started,
-      players: this.players().map(({ id, name, seat, romHash, rttMs, directRttMs }) => ({
+      relay: { nodes, selection: this.selection, recommendedNodeId,
+        activeNodeId: this.started ? this.activeNodeId : this.selection.mode === "auto" ? recommendedNodeId : this.selection.nodeId },
+      players: players.map(({ id, name, seat, romHash, rttMs, directRttMs, relayProbes }) => ({
         id,
         name,
         seat,
         romHash,
         rttMs,
         directRttMs: directRttMs ?? null,
+        relayProbes,
       })),
     };
   }

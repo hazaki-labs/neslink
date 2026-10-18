@@ -1,4 +1,5 @@
 import type { RoomEndReason, RoomErrorCode, RoomState } from "./netplay/protocol";
+import type { RelaySelection } from "./netplay/relay";
 
 /** Messages between the UI thread and the emulator worker. */
 
@@ -36,6 +37,7 @@ export type ToWorker =
   | { type: "netSignal"; to: string; data: unknown }
   /** Host only: ask the room to start. */
   | { type: "netStart" }
+  | { type: "netRelaySelect"; selection: RelaySelection }
   /** Lobby: sit in a seat, or null to spectate. */
   | { type: "netSeat"; seat: number | null }
   | { type: "netLeave" };
@@ -43,6 +45,7 @@ export type ToWorker =
 export type NetStatus = "connecting" | "open" | "closed";
 
 export type FromWorker =
+  | { type: "netRelayStatus"; nodeId: string; state: "connecting" | "open" | "failed"; rttMs: number | null }
   | { type: "ready" }
   | { type: "romLoaded" }
   | {

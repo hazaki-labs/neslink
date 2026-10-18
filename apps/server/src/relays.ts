@@ -1,0 +1,47 @@
+import { secretBytes, type SigningKey } from "@neslink/relay-auth";
+import type { RelayNode } from "@neslink/core/netplay";
+import type { Env } from "./index";
+
+/** Public node metadata is separated from signing secrets, including in configuration. */
+let cachedConfig: string | undefined;
+let cachedInsecure: string | undefined;
+let cachedNodes: RelayNode[] = [];
+
+export function relayNodes(env: Env): RelayNode[] {
+  const config = env.RELAY_NODES ?? "[]";
+  if (config === cachedConfig && env.RELAY_ALLOW_INSECURE === cachedInsecure) return cachedNodes;
+  cachedConfig = config;
+  cachedInsecure = env.RELAY_ALLOW_INSECURE;
+  try {
+    cachedNodes = parseRelayNodes(env);
+  } catch {
+    // Optional relays must never prevent rooms from using the built-in route.
+    // Do not log the configuration: malformed metadata could contain credentials.
+    console.error("Invalid RELAY_NODES; external relays disabled");
+    cachedNodes = [];
+  }
+  return cachedNodes;
+}
+
+function parseRelayNodes(env: Env): RelayNode[] {
+  const nodes: unknown = JSON.parse(env.RELAY_NODES ?? "[]");
+  if (!Array.isArray(nodes) || nodes.length > 16) throw new Error("Invalid RELAY_NODES");
+  const ids = new Set<string>();
+  return nodes.map((node: RelayNode) => {
+    if (!node || typeof node.id !== "string" || !/^[a-z0-9-]{1,32}$/.test(node.id) || node.id === "main" || ids.has(node.id) ||
+        typeof node.name !== "string" || !node.name.trim() || node.name.length > 60 || typeof node.url !== "string") throw new Error("Invalid relay node");
+    const url = new URL(node.url);
+    if ((url.protocol !== "https:" && !(url.protocol === "http:" && (env.RELAY_ALLOW_INSECURE === "1" || ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) ||
+        url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new Error("Relay URLs must be HTTPS origins (non-loopback HTTP requires RELAY_ALLOW_INSECURE=1)");
+    ids.add(node.id);
+    return { id: node.id, name: node.name, url: url.origin };
+  });
+}
+
+export function relayKey(env: Env, nodeId: string): SigningKey {
+  const keys = JSON.parse(env.RELAY_SIGNING_KEYS ?? "{}") as Record<string, SigningKey>;
+  const key = Object.hasOwn(keys, nodeId) ? keys[nodeId] : undefined;
+  if (!key || typeof key.kid !== "string" || !/^[a-zA-Z0-9-]{1,40}$/.test(key.kid) || typeof key.secret !== "string") throw new Error("Relay signing key missing");
+  secretBytes(key.secret);
+  return key;
+}

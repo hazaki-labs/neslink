@@ -112,6 +112,10 @@ export class EmulatorClient {
     this.send({ type: "netStart" });
   }
 
+  selectRelay(selection: import("@neslink/core").RelaySelection): void {
+    this.send({ type: "netRelaySelect", selection });
+  }
+
   /** Sit in `seat`, or stand up to spectate with null. */
   takeSeat(seat: number | null): void {
     this.send({ type: "netSeat", seat });

@@ -88,7 +88,7 @@ export function playerName(): string {
   }
 }
 
-const API_ERROR_CODES: readonly string[] = ["roomNotFound", "badRequest", "missingRomHash"] satisfies ApiErrorCode[];
+const API_ERROR_CODES: readonly string[] = ["roomNotFound", "badRequest", "missingRomHash", "relayUnavailable", "connectionDenied", "tooManyRequests"] satisfies ApiErrorCode[];
 
 async function errorCode(res: Response, fallback: RoomApiError["code"]): Promise<RoomApiError["code"]> {
   try {
