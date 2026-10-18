@@ -3,6 +3,7 @@ import {
   chooseNetplayDelay,
   NETPLAY_PING,
   NETPLAY_PONG,
+  NETPLAY_RECONNECT_GRACE_MS,
   NETPLAY_SEATS,
   type ClientMessage,
   type RoomInfo,
@@ -26,6 +27,8 @@ const MAX_LOGGED_INPUTS = 900_000;
 const MAX_SNAPSHOT_CHARS = 512 * 1024;
 /** SDP offers with many candidates run a few KB; this is generous. */
 const MAX_SIGNAL_CHARS = 32 * 1024;
+/** Fewest milliseconds between two reactions from one player. */
+const REACTION_SPACING_MS = 400;
 
 /** Per-socket player data. Stored on the socket so it survives hibernation. */
 interface Attachment extends RoomPlayer {
@@ -34,6 +37,13 @@ interface Attachment extends RoomPlayer {
   ticketAt: number;
   probedAt: number;
   awaitingSnapshot?: boolean;
+  /** Secret that lets this tab rejoin as this player after a drop. */
+  resumeToken: string;
+}
+
+/** A seated player who dropped without leaving; their seat is kept until `until`. */
+interface PendingPlayer extends Attachment {
+  until: number;
 }
 
 /** Persisted at start so tickets keep the same scope after object recovery. */
@@ -71,6 +81,10 @@ export class Room extends DurableObject<Env> {
   private activeNodeId: string | null = null;
   /** frame -> seat -> hash, until every seat has reported that frame. */
   private readonly hashes = new Map<number, Map<number, number>>();
+  /** Seated players who dropped and may come back, by id. Persisted. */
+  private pending = new Map<string, PendingPlayer>();
+  /** id -> last reaction time, for rate limiting. */
+  private readonly reactedAt = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -81,10 +95,15 @@ export class Room extends DurableObject<Env> {
       this.hostId = (await ctx.storage.get<string>("hostId")) ?? null;
       this.started = (await ctx.storage.get<boolean>("started")) ?? false;
       this.selection = (await ctx.storage.get<RelaySelection>("relaySelection")) ?? this.selection;
+      for (const p of (await ctx.storage.get<PendingPlayer[]>("pending")) ?? []) this.pending.set(p.id, p);
       const active = await ctx.storage.get<ActiveGame>("activeGame");
       if (this.started && active) {
         this.activeNodeId = active.activeNodeId;
-        this.game = { ...active, historyComplete: false, snapshot: null, log: [] };
+        // History saved while someone was reconnecting lets them (and spectators) resume right away.
+        const history = await ctx.storage.get<Pick<Game, "snapshot" | "log">>("gameHistory");
+        this.game = history
+          ? { ...active, historyComplete: true, snapshot: history.snapshot, log: history.log }
+          : { ...active, historyComplete: false, snapshot: null, log: [] };
       } else if (this.started) {
         // Old deployments persisted only started, without enough data to resume.
         this.started = false;
@@ -187,8 +206,23 @@ export class Room extends DurableObject<Env> {
         break;
       }
       case "hello":
-        if (!me) await this.join(ws, message.name, message.romHash);
+        if (!me) await this.join(ws, message.name, message.romHash, message.resume);
         break;
+      case "rename":
+        if (me && typeof message.name === "string" && message.name.trim()) {
+          me.name = message.name.trim().slice(0, 20);
+          ws.serializeAttachment(me);
+          this.broadcast({ t: "room", room: this.state() });
+        }
+        break;
+      case "react": {
+        if (!me || message.kind !== "thumbs") break;
+        const now = Date.now();
+        if (now - (this.reactedAt.get(me.id) ?? 0) < REACTION_SPACING_MS) break;
+        this.reactedAt.set(me.id, now);
+        this.broadcast({ t: "react", from: me.id, kind: "thumbs" }, ws);
+        break;
+      }
       case "seat":
         if (me) this.takeSeat(ws, me, message.seat);
         break;
@@ -198,6 +232,8 @@ export class Room extends DurableObject<Env> {
       case "input":
         if (this.playing(me) && isFrame(message.f) && isMask(message.m)) {
           this.logInput(me.seat, message.f, message.m);
+          // While someone is reconnecting, keep the history they will resume from safe.
+          if (this.pending.size > 0) await this.saveHistory();
           const a = Number.isInteger(message.a) ? message.a : undefined;
           this.broadcast({ t: "input", s: me.seat, f: message.f, m: message.m, a }, ws);
         }
@@ -228,24 +264,63 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  async webSocketClose(ws: WebSocket): Promise<void> {
-    await this.leave(ws);
+  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    // "Leave room" closes with 1000 "leave"; anything else (refresh, network drop) may come back.
+    await this.leave(ws, code === 1000 && reason === "leave");
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
-    await this.leave(ws);
+    await this.leave(ws, false);
   }
 
   async alarm(): Promise<void> {
-    if (this.ctx.getWebSockets().length > 0) {
-      await this.ctx.storage.setAlarm(Date.now() + IDLE_TTL_MS);
+    const now = Date.now();
+    let changed = false;
+    for (const [id, p] of this.pending) {
+      if (p.until > now) continue;
+      this.pending.delete(id);
+      changed = true;
+      await this.dropped(p);
+    }
+    if (changed) {
+      await this.ctx.storage.put("pending", [...this.pending.values()]);
+      this.broadcast({ t: "room", room: this.state() });
+    }
+    if (this.ctx.getWebSockets().length === 0 && this.pending.size === 0) {
+      await this.ctx.storage.deleteAll();
+      this.info = null;
       return;
     }
-    await this.ctx.storage.deleteAll();
-    this.info = null;
+    await this.scheduleAlarm();
   }
 
-  private async join(ws: WebSocket, rawName: unknown, romHash: unknown) {
+  /** Next alarm: the earliest reconnect deadline, else the idle TTL. */
+  private async scheduleAlarm() {
+    const deadlines = [...this.pending.values()].map((p) => p.until);
+    await this.ctx.storage.setAlarm(deadlines.length ? Math.min(...deadlines) : Date.now() + IDLE_TTL_MS);
+  }
+
+  /** A player is gone for good: end their game, hand on the host role. */
+  private async dropped(me: Attachment) {
+    // A seated player leaving ends the game: it cannot continue without them.
+    if (me.seat !== null && this.started && this.game?.seats.includes(me.seat)) {
+      this.started = false;
+      this.game = null;
+      await this.ctx.storage.put({ started: false, activeGame: null });
+      await this.ctx.storage.delete("gameHistory");
+    }
+    if (me.id === this.hostId) {
+      this.hostId = this.players()[0]?.id ?? [...this.pending.values()][0]?.id ?? null;
+      await this.ctx.storage.put("hostId", this.hostId);
+    }
+  }
+
+  private async saveHistory() {
+    if (this.game) await this.ctx.storage.put("gameHistory", { snapshot: this.game.snapshot, log: this.game.log });
+  }
+
+  private async join(ws: WebSocket, rawName: unknown, romHash: unknown, resume: unknown) {
+    if (await this.rejoin(ws, resume)) return;
     const name = typeof rawName === "string" && rawName.trim() ? rawName.trim().slice(0, 20) : "Player";
     const hash = typeof romHash === "string" ? romHash : "";
     // The first person in (the host, normally) sits down; everyone after starts as a
@@ -262,15 +337,53 @@ export class Room extends DurableObject<Env> {
       connectionToken: crypto.randomUUID() + crypto.randomUUID(),
       ticketAt: 0,
       probedAt: 0,
+      resumeToken: crypto.randomUUID() + crypto.randomUUID(),
     };
     ws.serializeAttachment(me);
-    if (!this.hostId || !this.players().some((p) => p.id === this.hostId)) {
+    if (!this.hostId || ![...this.players(), ...this.pending.values()].some((p) => p.id === this.hostId)) {
       this.hostId = me.id;
       await this.ctx.storage.put("hostId", me.id);
     }
-    this.send(ws, { t: "welcome", you: me.id, room: this.state(), connectionToken: me.connectionToken });
+    this.send(ws, { t: "welcome", you: me.id, room: this.state(), connectionToken: me.connectionToken, resumeToken: me.resumeToken });
     this.broadcast({ t: "room", room: this.state() }, ws);
     if (this.started) this.sendGameInProgress(ws, me);
+  }
+
+  /**
+   * Take a returning player back as who they were: their seat, name and id.
+   * They may also return over a new socket before the room noticed the old one
+   * is dead; then the old one is retired. Returns false for anyone else.
+   */
+  private async rejoin(ws: WebSocket, resume: unknown): Promise<boolean> {
+    if (!resume || typeof resume !== "object") return false;
+    const { id, token } = resume as { id?: unknown; token?: unknown };
+    if (typeof id !== "string" || typeof token !== "string") return false;
+    let previous: Attachment | undefined = this.pending.get(id);
+    if (previous) {
+      if (previous.resumeToken !== token) return false;
+      this.pending.delete(id);
+      await this.ctx.storage.put("pending", [...this.pending.values()]);
+    } else {
+      const stale = this.ctx.getWebSockets().find((socket) => socket !== ws && this.player(socket)?.id === id);
+      const attachment = stale && this.player(stale);
+      if (!attachment || attachment.resumeToken !== token) return false;
+      stale!.serializeAttachment(null);
+      try {
+        stale!.close(1000, "replaced");
+      } catch {
+        // Already gone.
+      }
+      previous = attachment;
+    }
+    const { until: _until, ...rest } = previous as PendingPlayer;
+    const me: Attachment = { ...rest, connectionToken: crypto.randomUUID() + crypto.randomUUID(), ticketAt: 0, probedAt: 0 };
+    ws.serializeAttachment(me);
+    this.send(ws, { t: "welcome", you: me.id, room: this.state(), connectionToken: me.connectionToken, resumeToken: me.resumeToken });
+    this.broadcast({ t: "room", room: this.state() }, ws);
+    if (this.started) this.sendGameInProgress(ws, me);
+    if (this.pending.size === 0) await this.ctx.storage.delete("gameHistory");
+    await this.scheduleAlarm();
+    return true;
   }
 
   /** Bring a spectator arriving mid-game up to date: snapshot plus every input since. */
@@ -303,7 +416,7 @@ export class Room extends DurableObject<Env> {
     } else {
       if (!Number.isInteger(seat) || (seat as number) < 0 || (seat as number) >= NETPLAY_SEATS) return;
       if (me.romHash !== this.info!.romHash) return this.send(ws, { t: "error", code: "romMismatch" });
-      if (this.players().some((p) => p.seat === seat && p.id !== me.id)) {
+      if ([...this.players(), ...this.pending.values()].some((p) => p.seat === seat && p.id !== me.id)) {
         return this.send(ws, { t: "error", code: "seatTaken" });
       }
       me.seat = seat as number;
@@ -315,6 +428,7 @@ export class Room extends DurableObject<Env> {
   private async start(ws: WebSocket, me: Attachment) {
     if (me.id !== this.hostId) return this.send(ws, { t: "error", code: "notHost" });
     if (this.started) return;
+    if ([...this.pending.values()].some((p) => p.seat !== null)) return this.send(ws, { t: "error", code: "playerReconnecting" });
     const seated = this.players().filter((p) => p.seat !== null);
     if (seated.length === 0) return this.send(ws, { t: "error", code: "noPlayers" });
     // Players roll back, so a small delay (from latency measured now, over a
@@ -338,7 +452,7 @@ export class Room extends DurableObject<Env> {
     this.broadcast({ t: "start", delay, seats });
   }
 
-  private async leave(ws: WebSocket) {
+  private async leave(ws: WebSocket, intentional: boolean) {
     const me = this.player(ws);
     ws.serializeAttachment(null);
     try {
@@ -347,19 +461,16 @@ export class Room extends DurableObject<Env> {
       // Already closed.
     }
     if (!me) return;
-    // A seated player leaving ends the game: lockstep cannot continue without them.
-    // Spectators come and go freely.
-    if (me.seat !== null && this.started) {
-      this.started = false;
-      this.game = null;
-      await this.ctx.storage.put({ started: false, activeGame: null });
-    }
-    if (me.id === this.hostId) {
-      this.hostId = this.players()[0]?.id ?? null;
-      await this.ctx.storage.put("hostId", this.hostId);
-    }
-    if (this.ctx.getWebSockets().length <= 1) {
-      await this.ctx.storage.setAlarm(Date.now() + IDLE_TTL_MS);
+    if (me.seat !== null && !intentional) {
+      // Dropped, not left: keep their seat (and the game) for a while so they can come back.
+      this.pending.set(me.id, { ...me, until: Date.now() + NETPLAY_RECONNECT_GRACE_MS });
+      await this.ctx.storage.put("pending", [...this.pending.values()]);
+      if (this.started) await this.saveHistory();
+      await this.scheduleAlarm();
+    } else {
+      // Spectators come and go freely; a seated player who left ends the game.
+      await this.dropped(me);
+      if (this.ctx.getWebSockets().length <= 1) await this.scheduleAlarm();
     }
     this.broadcast({ t: "room", room: this.state() }, ws);
   }
@@ -422,7 +533,10 @@ export class Room extends DurableObject<Env> {
 
   private state(): RoomState {
     const nodes = relayNodes(this.env);
-    const players = this.players().map((player) => ({
+    const players = [
+      ...this.players().map((player) => ({ ...player, connected: true })),
+      ...[...this.pending.values()].map((player) => ({ ...player, connected: false })),
+    ].map((player) => ({
       ...player,
       relayProbes: Date.now() - (player.probedAt ?? 0) < 45_000 ? player.relayProbes ?? [] : [],
     }));
@@ -433,7 +547,7 @@ export class Room extends DurableObject<Env> {
       started: this.started,
       relay: { nodes, selection: this.selection, recommendedNodeId,
         activeNodeId: this.started ? this.activeNodeId : this.selection.mode === "auto" ? recommendedNodeId : this.selection.nodeId },
-      players: players.map(({ id, name, seat, romHash, rttMs, directRttMs, relayProbes }) => ({
+      players: players.map(({ id, name, seat, romHash, rttMs, directRttMs, relayProbes, connected }) => ({
         id,
         name,
         seat,
@@ -441,6 +555,7 @@ export class Room extends DurableObject<Env> {
         rttMs,
         directRttMs: directRttMs ?? null,
         relayProbes,
+        connected,
       })),
     };
   }

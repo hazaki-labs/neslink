@@ -35,6 +35,8 @@ function harness(config = env) {
       for (const [name, item] of typeof key === "string" ? [[key, value]] : Object.entries(key)) data.set(name as string, structuredClone(item));
     },
     setAlarm: async () => {},
+    delete: async (key: string) => data.delete(key),
+    deleteAll: async () => data.clear(),
   };
   async function load() {
     let ready: Promise<unknown>;
@@ -74,7 +76,8 @@ it("restores the frozen node and game identity, reissues tickets, and waits for 
   await send(again, host, { t: "input", f: 600, m: 16 });
   await send(again, host, { t: "snapshot", f: 600, s: "saved-state" });
   expect(spectator.messages.find((m) => m.t === "start")).toMatchObject({ from: { f: 600, s: "saved-state" }, inputs: [[0, 600, 16]] });
-  await again.webSocketClose(host as any);
+  // Leaving on purpose ("Leave room") ends the game at once; a drop would keep the seat.
+  await again.webSocketClose(host as any, 1000, "leave");
   expect(h.data.get("started")).toBe(false);
   expect(h.data.get("activeGame")).toBe(null);
   await expect((await h.load()).relayTicket("forged", origin)).resolves.toMatchObject({ status: 403 });
@@ -114,4 +117,50 @@ it("compares the oldest retained hash frame at capacity, including after pruning
   await send(room, guest, { t: "hash", f: 2, h: 1 });
   expect(host.messages.filter((m) => m.t === "desync")).toHaveLength(1);
   vi.unstubAllGlobals();
+});
+
+it("keeps a dropped player's seat and game, lets them rejoin, and ends the game when they never come back", async () => {
+  const h = harness(); const room = await h.load(); await room.init(info);
+  const host = await h.join(room, "Host"); const guest = await h.join(room, "Guest");
+  await send(room, guest, { t: "seat", seat: 1 });
+  await send(room, host, { t: "start" });
+  await send(room, host, { t: "input", f: 2, m: 1 });
+  await send(room, guest, { t: "input", f: 2, m: 2 });
+  const { you, resumeToken } = guest.messages.find((m) => m.t === "welcome");
+
+  // A refresh or network drop: the seat and the game wait for the guest.
+  await room.webSocketClose(guest as any, 1006, "");
+  expect(h.data.get("started")).toBe(true);
+  const waiting = host.messages.filter((m) => m.t === "room").at(-1).room;
+  expect(waiting.players.find((p: any) => p.id === you)).toMatchObject({ seat: 1, connected: false });
+
+  // A wrong token gets a new identity; the right one gets the seat back and the game's history.
+  const impostor = new Socket(); (room as any).ctx.getWebSockets().push(impostor);
+  await send(room, impostor, { t: "hello", name: "X", romHash: info.romHash, resume: { id: you, token: "nope" } });
+  expect(impostor.messages.find((m) => m.t === "welcome").you).not.toBe(you);
+  const back = new Socket(); (room as any).ctx.getWebSockets().push(back);
+  await send(room, back, { t: "hello", name: "Guest", romHash: info.romHash, resume: { id: you, token: resumeToken } });
+  expect(back.messages.find((m) => m.t === "welcome")).toMatchObject({ you });
+  expect(back.attachment).toMatchObject({ id: you, seat: 1 });
+  expect(back.messages.find((m) => m.t === "start")).toMatchObject({ seats: [0, 1], inputs: [[0, 2, 1], [1, 2, 2]] });
+
+  // Gone for longer than the grace period: the game ends.
+  await room.webSocketClose(back as any, 1006, "");
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+  await room.alarm();
+  expect(h.data.get("started")).toBe(false);
+  expect(host.messages.filter((m) => m.t === "room").at(-1).room.players.some((p: any) => p.id === you)).toBe(false);
+});
+
+it("relays thumbs-ups and renames", async () => {
+  const h = harness(); const room = await h.load(); await room.init(info);
+  const host = await h.join(room, "Host"); const guest = await h.join(room, "Guest");
+  await send(room, guest, { t: "react", kind: "thumbs" });
+  await send(room, guest, { t: "react", kind: "thumbs" }); // too soon: dropped
+  const hostId = host.messages.find((m) => m.t === "welcome").you;
+  const guestId = guest.messages.find((m) => m.t === "welcome").you;
+  expect(host.messages.filter((m) => m.t === "react")).toEqual([{ t: "react", from: guestId, kind: "thumbs" }]);
+  expect(guest.messages.some((m) => m.t === "react")).toBe(false);
+  await send(room, host, { t: "rename", name: "  New name  " });
+  expect(guest.messages.filter((m) => m.t === "room").at(-1).room.players.find((p: any) => p.id === hostId).name).toBe("New name");
 });

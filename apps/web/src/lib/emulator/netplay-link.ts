@@ -9,7 +9,9 @@ import {
   type RoomState,
   type ServerMessage,
   type PeerPacket,
+  type ReactionKind,
   type RelaySelection,
+  NETPLAY_RECONNECT_GRACE_MS,
 } from "@neslink/core/netplay";
 import type { NetStatus } from "@neslink/core";
 import { probeRelays, summarizeProbe } from "../relay-probes";
@@ -25,8 +27,16 @@ export interface GameStart {
   delay: number;
   /** Frame to start from: 0 (power-on) or a snapshot's frame. */
   startFrame: number;
-  /** Base64 save state for a late spectator, else null. */
+  /** Base64 save state for a late spectator or a rejoining player, else null. */
   snapshot: string | null;
+  /** Inputs the room logged since that frame, all seats (ours too, when rejoining). */
+  inputs: [seat: number, frame: number, mask: number][];
+}
+
+/** Who this tab is in the room, to rejoin as after a drop or a refresh. */
+export interface RoomCredentials {
+  id: string;
+  token: string;
 }
 
 export interface NetplayEvents {
@@ -48,6 +58,10 @@ export interface NetplayEvents {
   onSignal(from: string, data: unknown): void;
   onRelayPacket(packet: PeerPacket): void;
   onRelayStatus(status: RelayStatus): void;
+  /** Our identity in the room changed (joined or rejoined); keep it to rejoin later. */
+  onCredentials(credentials: RoomCredentials): void;
+  /** Someone in the room reacted. */
+  onReaction(from: string, kind: ReactionKind): void;
 }
 
 /** Extra latency to simulate on this link (dev tool, from `?lag=` / `?swing=`). */
@@ -60,11 +74,18 @@ export interface SimulatedNetwork {
 
 const PING_INTERVAL_MS = 1000;
 const PING_SAMPLES = 5;
+const RETRY_FIRST_MS = 300;
+const RETRY_MAX_MS = 2000;
 
 /** One player's connection to a room: the socket plus the game session once started. */
 export class NetplayLink {
   session: NetSession | null = null;
-  private readonly ws: WebSocket;
+  private ws!: WebSocket;
+  private resumeToken: string | null = null;
+  /** While reconnecting: give up at this time (the room keeps our seat until then). */
+  private reconnectBy = 0;
+  private retryMs = RETRY_FIRST_MS;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private you: string | null = null;
   private room: RoomState | null = null;
   private closed = false;
@@ -80,40 +101,71 @@ export class NetplayLink {
   private probing = false;
   private readonly controlOrigin: string;
 
+  /** `resume`: credentials from before a page refresh, to rejoin as that player. */
   constructor(
-    url: string,
-    hello: { name: string; romHash: string },
+    private readonly url: string,
+    private readonly hello: { name: string; romHash: string },
     private readonly events: NetplayEvents,
     private readonly simulated: SimulatedNetwork | null = null,
+    private readonly resume: RoomCredentials | null = null,
   ) {
     events.onStatus("connecting");
     const base = new URL(url);
     base.protocol = base.protocol === "wss:" ? "https:" : "http:";
     this.controlOrigin = base.origin;
-    this.ws = new WebSocket(url);
-    this.ws.onopen = () => {
-      events.onStatus("open");
-      this.send({ t: "hello", ...hello });
+    this.connect();
+  }
+
+  private connect() {
+    this.retryTimer = null;
+    const ws = new WebSocket(this.url);
+    this.ws = ws;
+    ws.onopen = () => {
+      if (ws !== this.ws) return;
+      this.events.onStatus("open");
+      // After a drop (or a refresh) ask to be who we were: same seat, same game.
+      const resume = this.you && this.resumeToken ? { id: this.you, token: this.resumeToken } : this.resume ?? undefined;
+      this.send({ t: "hello", ...this.hello, resume });
       this.ping();
       this.pingTimer = setInterval(() => this.ping(), PING_INTERVAL_MS);
     };
-    this.ws.onmessage = (event) =>
+    ws.onmessage = (event) =>
       this.later("receive", () => {
+        if (ws !== this.ws) return;
         if (this.closed && event.data !== NETPLAY_PONG) return;
         if (event.data === NETPLAY_PONG) return this.onPong();
         this.onMessage(JSON.parse(event.data as string) as ServerMessage);
       });
-    this.ws.onclose = (event) => {
+    ws.onclose = (event) => {
+      if (ws !== this.ws) return;
       this.stopPinging();
       this.stopRelay();
       if (this.closed) return;
+      const now = performance.now();
+      if (this.you && this.resumeToken && (this.reconnectBy === 0 || now < this.reconnectBy)) {
+        // Unexpected drop: try again until the room gives our seat away. The game
+        // keeps running on predictions meanwhile, until its window runs out.
+        if (this.reconnectBy === 0) this.reconnectBy = now + NETPLAY_RECONNECT_GRACE_MS - 1000;
+        this.events.onStatus("reconnecting");
+        this.retryTimer = setTimeout(() => this.connect(), this.retryMs);
+        this.retryMs = Math.min(this.retryMs * 2, RETRY_MAX_MS);
+        return;
+      }
       this.closed = true;
       if (this.session) {
         this.session = null;
-        events.onEnd("disconnected");
+        this.events.onEnd("disconnected");
       }
-      events.onStatus("closed", event.reason || undefined);
+      this.events.onStatus("closed", event.reason || undefined);
     };
+  }
+
+  rename(name: string): void {
+    this.send({ t: "rename", name });
+  }
+
+  react(kind: ReactionKind): void {
+    this.send({ t: "react", kind });
   }
 
   requestStart(): void {
@@ -152,8 +204,10 @@ export class NetplayLink {
   close(): void {
     this.stopPinging();
     this.stopRelay();
+    if (this.retryTimer !== null) clearTimeout(this.retryTimer);
     this.closed = true;
     this.session = null;
+    // "leave" tells the room we left on purpose: no seat is kept for us.
     this.ws.close(1000, "leave");
   }
 
@@ -201,6 +255,10 @@ export class NetplayLink {
       case "welcome":
         this.you = message.you;
         this.connectionToken = message.connectionToken ?? null;
+        this.resumeToken = message.resumeToken ?? null;
+        this.reconnectBy = 0;
+        this.retryMs = RETRY_FIRST_MS;
+        if (this.resumeToken) this.events.onCredentials({ id: message.you, token: this.resumeToken });
         this.updateRoom(message.room);
         void this.probe();
         if (this.probeTimer !== null) clearInterval(this.probeTimer);
@@ -219,8 +277,8 @@ export class NetplayLink {
           delay: message.delay,
           startFrame: message.from?.f ?? 0,
           snapshot: message.from?.s ?? null,
+          inputs: message.inputs ?? [],
         });
-        for (const [s, f, m] of message.inputs ?? []) this.session?.receive(s, f, m);
         this.stopRelay();
         const node = this.room?.relay?.nodes.find((node) => node.id === this.room?.relay?.activeNodeId);
         if (node && this.connectionToken && this.room) {
@@ -240,6 +298,9 @@ export class NetplayLink {
         break;
       case "signal":
         this.events.onSignal(message.from, message.data);
+        break;
+      case "react":
+        this.events.onReaction(message.from, message.kind);
         break;
       case "error":
         this.events.onError(message.code);

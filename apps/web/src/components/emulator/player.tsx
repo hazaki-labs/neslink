@@ -19,7 +19,7 @@ import {
   type PeerStatus,
 } from "@/lib/emulator/emulator-client";
 import { useControllerInput } from "@/lib/emulator/use-controller-input";
-import { directLinkPolicy, playerName, roomSocketUrl, simulatedNetwork } from "@/lib/rooms";
+import { directLinkPolicy, playerName, roomSocketUrl, setPlayerName, simulatedNetwork } from "@/lib/rooms";
 import { getSave, putSave, type StoredRom } from "@/lib/storage";
 import { RoomLobby } from "./room-lobby";
 
@@ -94,6 +94,10 @@ function describeError(t: Messages, error: EmulatorError): string {
 /** Text worded at render time, so switching language rewords what is on screen. */
 type Text = (t: Messages) => string;
 
+/** How long a thumbs-up stays on screen, and the fewest ms between two of ours. */
+const REACTION_MS = 1600;
+const REACTION_SPACING_MS = 400;
+
 /** Plays a ROM alone, or in a netplay room when `room` is given. */
 export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo; onExit: () => void }) {
   const roomId = room?.id ?? null;
@@ -106,6 +110,17 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
   const [hasSave, setHasSave] = useState(false);
   const [net, setNet] = useState<NetView>(INITIAL_NET);
   const [peer, setPeer] = useState<PeerStatus>({ state: "off", rttMs: null });
+  /** Thumbs-ups floating up the screen: who sent each (null for us) and where it drifts. */
+  const [reactions, setReactions] = useState<{ id: number; from: string | null; x: number }[]>([]);
+  const reactionId = useRef(0);
+  const lastReaction = useRef(0);
+
+  function showReaction(from: string | null) {
+    const id = ++reactionId.current;
+    const x = 15 + Math.random() * 70;
+    setReactions((list) => [...list.slice(-11), { id, from, x }]);
+    setTimeout(() => setReactions((list) => list.filter((r) => r.id !== id)), REACTION_MS);
+  }
 
   function flash(text: Text, ms = 2000) {
     setMessage(() => text);
@@ -122,6 +137,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
       onNet: (event) => {
         if (event.type === "netDesync") flash((t) => t.player.desync(event.frame), 5000);
         else if (event.type === "netError") flash((t) => t.roomErrors[event.code], 4000);
+        else if (event.type === "netReaction") showReaction(event.from);
         else setNet((view) => applyNetEvent(view, event));
       },
     });
@@ -159,6 +175,32 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
   }, [rom]);
 
   useControllerInput(client);
+
+  // Q sends everyone a thumbs-up for a great move (rooms only, not while typing).
+  useEffect(() => {
+    if (!client || !roomId) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== "KeyQ" || event.repeat) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      const now = performance.now();
+      if (now - lastReaction.current < REACTION_SPACING_MS) return;
+      lastReaction.current = now;
+      client.react();
+      showReaction(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [client, roomId]);
+
+  const rename = (name: string) => {
+    setPlayerName(name);
+    client?.rename(name);
+  };
+
+  // Seated players who dropped and may still come back.
+  const away = net.playing
+    ? (net.room?.players.filter((p) => p.seat !== null && p.connected === false && p.id !== net.you) ?? [])
+    : [];
 
   const togglePause = () => {
     client?.setPaused(!paused);
@@ -239,8 +281,26 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
             onStart={() => client?.startRoom()}
             onSeat={(seat) => client?.takeSeat(seat)}
             onRelaySelect={(selection) => client?.selectRelay(selection)}
+            onRename={rename}
           />
         )}
+        {roomId && net.playing && (net.status === "reconnecting" || away.length > 0) && (
+          <div className="absolute inset-x-0 bottom-4 z-10 mx-auto w-fit rounded-md bg-black/75 px-3 py-1.5 text-sm text-amber-200">
+            {net.status === "reconnecting" ? t.player.reconnecting : t.player.waitingFor(away.map((p) => p.name).join(t.lobby.listSeparator))}
+          </div>
+        )}
+        {reactions.map((r) => (
+          <div
+            key={r.id}
+            className="pointer-events-none absolute bottom-10 z-20 flex flex-col items-center animate-[reaction-float_1.6s_ease-out_forwards]"
+            style={{ left: `${r.x}%` }}
+          >
+            <span className="text-5xl drop-shadow-[0_2px_4px_rgba(0,0,0,0.6)]">👍</span>
+            <span className="mt-1 rounded bg-black/60 px-1.5 text-xs text-white">
+              {r.from === null ? t.player.reactionYou : (net.room?.players.find((p) => p.id === r.from)?.name ?? "")}
+            </span>
+          </div>
+        ))}
         {message && (
           <div className="absolute inset-x-0 top-3 z-10 mx-auto w-fit rounded-md bg-black/70 px-3 py-1.5 text-sm text-white">
             {message(t)}
@@ -287,6 +347,12 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         <dd>V / B</dd>
         <dt>{t.player.controls.gamepad}</dt>
         <dd>{t.player.controls.gamepadHint}</dd>
+        {roomId && (
+          <>
+            <dt>{t.player.controls.thumbsUp}</dt>
+            <dd>Q</dd>
+          </>
+        )}
       </dl>
     </div>
   );
