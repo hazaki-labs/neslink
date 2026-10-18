@@ -54,6 +54,8 @@ export interface RoomPlayer {
   romHash: string;
   /** Latest round trip this player measured to the room, if any yet. */
   rttMs: number | null;
+  /** Round trip over this player's direct link to the other player, if one is up. */
+  directRttMs: number | null;
 }
 
 export interface RoomState {
@@ -74,10 +76,15 @@ export type ClientMessage =
   | { t: "input"; f: number; m: number; a?: number }
   /** State hash `h` after running frame `f`. */
   | { t: "hash"; f: number; h: number }
-  /** This player's measured round trip to the room, for choosing the input delay. */
-  | { t: "rtt"; ms: number }
+  /**
+   * This player's measured round trip to the room, and over its direct link to
+   * the other player if one is up, for choosing the input delay.
+   */
+  | { t: "rtt"; ms: number; direct?: number | null }
   /** Save state `s` (base64) taken before running frame `f`. */
-  | { t: "snapshot"; f: number; s: string };
+  | { t: "snapshot"; f: number; s: string }
+  /** WebRTC signaling (offer, answer, ICE candidate) for player `to`; relayed as is. */
+  | { t: "signal"; to: string; data: unknown };
 
 export type ServerMessage =
   | { t: "welcome"; you: string; room: RoomState }
@@ -97,4 +104,5 @@ export type ServerMessage =
     }
   | { t: "input"; s: number; f: number; m: number; a?: number }
   | { t: "desync"; f: number }
+  | { t: "signal"; from: string; data: unknown }
   | { t: "error"; code: RoomErrorCode };
