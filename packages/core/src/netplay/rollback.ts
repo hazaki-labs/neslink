@@ -90,6 +90,11 @@ export class RollbackSession {
     return Math.min(...this.contiguous.values()) + 1;
   }
 
+  /** Newest frame up to which every input of `seat` has arrived (an ack for direct links). */
+  receivedThrough(seat: number): number {
+    return this.contiguous.get(seat) ?? -1;
+  }
+
   /** Record a remote seat's input. If it contradicts a prediction already run, a rollback is due. */
   receive(seat: number, frame: number, mask: number): void {
     if (seat === this.localSeat) return;

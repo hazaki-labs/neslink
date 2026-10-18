@@ -4,7 +4,9 @@ import {
   type FromWorker,
   type ToWorker,
 } from "@neslink/core";
+import { PeerLink, type PeerStatus } from "./peer-link";
 
+export type { PeerStatus };
 export type EmulatorStats = Omit<Extract<FromWorker, { type: "stats" }>, "type">;
 /** What went wrong (for the UI to word) plus the untranslated detail. */
 export interface EmulatorError {
@@ -20,6 +22,8 @@ export interface EmulatorEvents {
   onStats?: (stats: EmulatorStats) => void;
   onError?: (error: EmulatorError) => void;
   onNet?: (event: NetEvent) => void;
+  /** State of the direct (WebRTC) link to the other player. */
+  onPeer?: (status: PeerStatus) => void;
 }
 
 /**
@@ -33,6 +37,7 @@ export class EmulatorClient {
   private readonly pending = new Map<number, (state: Uint8Array<ArrayBuffer>) => void>();
   private nextRequestId = 1;
   private destroyed = false;
+  private peer: PeerLink | null = null;
 
   constructor(private readonly events: EmulatorEvents = {}) {
     this.canvas = document.createElement("canvas");
@@ -72,9 +77,35 @@ export class EmulatorClient {
     this.send({ type: "loadRom", rom: copy, autostart }, [copy.buffer]);
   }
 
-  /** `simulated`: dev tool, extra latency to add to this player's link. */
-  joinRoom(url: string, name: string, romHash: string, simulated: { lagMs: number; jitterMs: number } | null = null): void {
-    this.send({ type: "netJoin", url, name, romHash, simulated });
+  /**
+   * `simulated`: dev tool, extra latency to add to this player's server link.
+   * `direct`: also try a WebRTC link straight to the other player (on by default),
+   * with this ICE transport policy; null for no direct link.
+   */
+  joinRoom(
+    url: string,
+    name: string,
+    romHash: string,
+    simulated: { lagMs: number; jitterMs: number } | null = null,
+    direct: RTCIceTransportPolicy | null = typeof RTCPeerConnection === "function" ? "all" : null,
+  ): void {
+    this.peer?.dispose();
+    this.peer = null;
+    let peerPort: MessagePort | null = null;
+    if (direct) {
+      const channel = new MessageChannel();
+      peerPort = channel.port2;
+      this.peer = new PeerLink(
+        channel.port1,
+        (to, data) => this.send({ type: "netSignal", to, data }),
+        (status) => {
+          this.send({ type: "peerRtt", ms: status.state === "open" ? status.rttMs : null });
+          this.events.onPeer?.(status);
+        },
+        direct,
+      );
+    }
+    this.send({ type: "netJoin", url, name, romHash, simulated, peerPort }, peerPort ? [peerPort] : []);
   }
 
   startRoom(): void {
@@ -87,6 +118,7 @@ export class EmulatorClient {
   }
 
   leaveRoom(): void {
+    this.peer?.close();
     this.send({ type: "netLeave" });
   }
 
@@ -119,6 +151,8 @@ export class EmulatorClient {
 
   destroy(): void {
     this.destroyed = true;
+    this.peer?.dispose();
+    this.peer = null;
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.worker.terminate();
     void this.audio.close();
@@ -167,6 +201,17 @@ export class EmulatorClient {
       case "error":
         this.events.onError?.({ kind: message.kind, message: message.message });
         break;
+      case "netSignal":
+        void this.peer?.handleSignal(message.from, message.data);
+        break;
+      case "netRoom": {
+        // Link directly to the other seated player, if we sit and exactly one other does.
+        const me = message.room.players.find((p) => p.id === message.you);
+        const others = message.room.players.filter((p) => p.seat !== null && p.id !== message.you);
+        this.peer?.setPeer(message.you, me?.seat != null && others.length === 1 ? others[0].id : null);
+        this.events.onNet?.(message);
+        break;
+      }
       default:
         this.events.onNet?.(message);
     }

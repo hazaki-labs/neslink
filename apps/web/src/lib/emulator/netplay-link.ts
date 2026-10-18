@@ -40,6 +40,8 @@ export interface NetplayEvents {
   onError(code: RoomErrorCode): void;
   /** Round trip to the room server in ms (median of recent probes). */
   onPing(rttMs: number): void;
+  /** WebRTC signaling from another player. */
+  onSignal(from: string, data: unknown): void;
 }
 
 /** Extra latency to simulate on this link (dev tool, from `?lag=` / `?jitter=`). */
@@ -63,6 +65,7 @@ export class NetplayLink {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private pingSentAt: number | null = null;
   private readonly rtts: number[] = [];
+  private directRtt: number | null = null;
   private sendAt = 0;
   private receiveAt = 0;
 
@@ -107,6 +110,15 @@ export class NetplayLink {
     this.send({ t: "seat", seat });
   }
 
+  /** Round trip over the direct link (null when none), reported with our next latency probe. */
+  setDirectRtt(ms: number | null): void {
+    this.directRtt = ms;
+  }
+
+  sendSignal(to: string, data: unknown): void {
+    this.send({ t: "signal", to, data });
+  }
+
   sendSnapshot(frame: number, state: string): void {
     this.send({ t: "snapshot", f: frame, s: state });
   }
@@ -142,7 +154,7 @@ export class NetplayLink {
     const rtt = sorted[sorted.length >> 1];
     this.events.onPing(rtt);
     // The room picks the game's input delay from every player's latest figure.
-    this.send({ t: "rtt", ms: rtt });
+    this.send({ t: "rtt", ms: rtt, direct: this.directRtt });
   }
 
   private stopPinging() {
@@ -181,6 +193,9 @@ export class NetplayLink {
         break;
       case "desync":
         this.events.onDesync(message.f);
+        break;
+      case "signal":
+        this.events.onSignal(message.from, message.data);
         break;
       case "error":
         this.events.onError(message.code);
