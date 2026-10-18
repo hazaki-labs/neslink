@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  chooseRelayInputDelay,
+  chooseNetplayDelay,
   NETPLAY_PING,
   NETPLAY_PONG,
   NETPLAY_SEATS,
@@ -33,17 +33,21 @@ interface Attachment extends RoomPlayer {
   connectionToken: string;
   ticketAt: number;
   probedAt: number;
+  awaitingSnapshot?: boolean;
 }
 
-/**
- * What a spectator needs to join a game in progress: the latest snapshot and
- * every input since it. Kept in memory only; a running game keeps the object
- * awake, since inputs arrive every frame.
- */
-interface Game {
+/** Persisted at start so tickets keep the same scope after object recovery. */
+interface ActiveGame {
   id: string;
   delay: number;
   seats: number[];
+  activeNodeId: string | null;
+}
+
+/** Snapshot/input history stays in memory; running inputs keep the object awake. */
+interface Game extends ActiveGame {
+  /** After object recovery, wait for a fresh snapshot before admitting spectators. */
+  historyComplete: boolean;
   snapshot: { f: number; s: string } | null;
   log: [seat: number, frame: number, mask: number][];
 }
@@ -77,6 +81,16 @@ export class Room extends DurableObject<Env> {
       this.hostId = (await ctx.storage.get<string>("hostId")) ?? null;
       this.started = (await ctx.storage.get<boolean>("started")) ?? false;
       this.selection = (await ctx.storage.get<RelaySelection>("relaySelection")) ?? this.selection;
+      const active = await ctx.storage.get<ActiveGame>("activeGame");
+      if (this.started && active) {
+        this.activeNodeId = active.activeNodeId;
+        this.game = { ...active, historyComplete: false, snapshot: null, log: [] };
+      } else if (this.started) {
+        // Old deployments persisted only started, without enough data to resume.
+        this.started = false;
+        await ctx.storage.put("started", false);
+        this.broadcast({ t: "room", room: this.state() });
+      }
     });
   }
 
@@ -266,6 +280,13 @@ export class Room extends DurableObject<Env> {
     if (!game || game.log.length >= MAX_LOGGED_INPUTS) {
       return this.send(ws, { t: "error", code: "lateJoinUnavailable" });
     }
+    if (!game.historyComplete) {
+      me.awaitingSnapshot = true;
+      ws.serializeAttachment(me);
+      return;
+    }
+    me.awaitingSnapshot = false;
+    ws.serializeAttachment(me);
     this.send(ws, {
       t: "start",
       delay: game.delay,
@@ -299,15 +320,20 @@ export class Room extends DurableObject<Env> {
     // Players roll back, so a small delay (from latency measured now, over a
     // direct link if both have one) is enough; prediction covers the rest.
     const activeNodeId = this.state().relay!.activeNodeId;
-    const delay = chooseRelayInputDelay(seated.map((player) => ({ ...player,
-      relayProbes: Date.now() - player.probedAt < 45_000 ? player.relayProbes : [],
-    })), activeNodeId);
+    // HTTP probes do not prove that a relay can authenticate. Keep enough delay
+    // for the established room/direct route even if relay admission later fails.
+    const delay = chooseNetplayDelay(seated);
     const seats = seated.map((p) => p.seat!).sort((a, b) => a - b);
     this.activeNodeId = activeNodeId;
-    this.game = { id: crypto.randomUUID(), delay, seats, snapshot: null, log: [] };
+    const active: ActiveGame = { id: crypto.randomUUID(), delay, seats, activeNodeId };
+    this.game = { ...active, historyComplete: true, snapshot: null, log: [] };
     this.started = true;
     this.hashes.clear();
-    await this.ctx.storage.put("started", true);
+    await this.ctx.storage.put({ started: true, activeGame: active });
+    for (const socket of this.ctx.getWebSockets()) {
+      const player = this.player(socket);
+      if (player?.awaitingSnapshot) { player.awaitingSnapshot = false; socket.serializeAttachment(player); }
+    }
     this.broadcast({ t: "room", room: this.state() });
     this.broadcast({ t: "start", delay, seats });
   }
@@ -326,7 +352,7 @@ export class Room extends DurableObject<Env> {
     if (me.seat !== null && this.started) {
       this.started = false;
       this.game = null;
-      await this.ctx.storage.put("started", false);
+      await this.ctx.storage.put({ started: false, activeGame: null });
     }
     if (me.id === this.hostId) {
       this.hostId = this.players()[0]?.id ?? null;
@@ -357,8 +383,13 @@ export class Room extends DurableObject<Env> {
     if (!game || seat !== game.seats[0] || state.length > MAX_SNAPSHOT_CHARS) return;
     if (game.snapshot && frame <= game.snapshot.f) return;
     game.snapshot = { f: frame, s: state };
+    game.historyComplete = true;
     // Inputs before the snapshot are inside it now.
     game.log = game.log.filter(([, f]) => f >= frame);
+    for (const ws of this.ctx.getWebSockets()) {
+      const me = this.player(ws);
+      if (me?.awaitingSnapshot) this.sendGameInProgress(ws, me);
+    }
   }
 
   private checkHash(frame: number, seat: number, hash: number) {

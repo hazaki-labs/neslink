@@ -3,7 +3,27 @@ import type { RelayNode } from "@neslink/core/netplay";
 import type { Env } from "./index";
 
 /** Public node metadata is separated from signing secrets, including in configuration. */
+let cachedConfig: string | undefined;
+let cachedInsecure: string | undefined;
+let cachedNodes: RelayNode[] = [];
+
 export function relayNodes(env: Env): RelayNode[] {
+  const config = env.RELAY_NODES ?? "[]";
+  if (config === cachedConfig && env.RELAY_ALLOW_INSECURE === cachedInsecure) return cachedNodes;
+  cachedConfig = config;
+  cachedInsecure = env.RELAY_ALLOW_INSECURE;
+  try {
+    cachedNodes = parseRelayNodes(env);
+  } catch {
+    // Optional relays must never prevent rooms from using the built-in route.
+    // Do not log the configuration: malformed metadata could contain credentials.
+    console.error("Invalid RELAY_NODES; external relays disabled");
+    cachedNodes = [];
+  }
+  return cachedNodes;
+}
+
+function parseRelayNodes(env: Env): RelayNode[] {
   const nodes: unknown = JSON.parse(env.RELAY_NODES ?? "[]");
   if (!Array.isArray(nodes) || nodes.length > 16) throw new Error("Invalid RELAY_NODES");
   const ids = new Set<string>();

@@ -22,6 +22,8 @@ Set `RELAY_NODES` on the Cloudflare Worker to a JSON string containing public me
 URLs must be HTTPS origins without paths, query strings or credentials. HTTP is
 accepted only on loopback for development. There can be at most 16 external nodes;
 `main` is reserved for the built-in room server. `[]` preserves the original setup.
+Configuration is cached until its value changes. Invalid metadata disables external
+nodes and logs a configuration error; rooms continue using the built-in route.
 
 Use `apps/server/wrangler.jsonc` → `vars` for public metadata. Store the corresponding
 signing material as the **Worker secret** `RELAY_SIGNING_KEYS`, not in `vars` or Git:
@@ -123,6 +125,7 @@ cross-origin requests without cookies or keys. After a warm-up request the clien
 collects three samples, displays median RTT and range (jitter), then refreshes
 every 15 seconds. Failed/incomplete probes are marked unavailable; reports older
 than 45 seconds are omitted.
+The main route uses the same median and range over its three most recent RTT samples.
 
 Everyone sees the same table, including spectators. Only the current host can
 change automatic/manual selection; this is checked on the controller, not only
@@ -132,8 +135,18 @@ occupied. The built-in route participates too. The selected node is frozen at
 game start. These public HTTP measurements are routing estimates, not a guarantee
 of game latency, throughput, packet loss, or a full two-client path measurement.
 Authenticated WebSocket RTT and fallback status are shown during play.
+The initial input delay uses the established room/WebRTC route, since HTTP probes
+cannot prove that relay admission will succeed. A faster relay still reduces input
+arrival time and rollbacks. Client relay sends are capped at 120 packets/second,
+independently of display refresh rate; the node allows 512 messages/second per socket
+to leave room for pings, bursts and older clients.
 Measurements are self-reported routing hints; they never grant permissions or
 replace the node's signature and seat checks.
+
+The controller persists the frozen node and game identity at start, allowing fresh
+relay tickets after a Durable Object recovery. Spectator history remains in memory;
+new spectators wait for the next player snapshot (normally within 600 frames) before
+joining a recovered game. Existing players can continue sending inputs meanwhile.
 
 Run `pnpm test:integration` after installing dependencies to exercise the real
 local Wrangler/workerd controller and a standalone relay, including permissions,

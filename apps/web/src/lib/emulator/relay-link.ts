@@ -11,6 +11,7 @@ export class RelayLink {
   private authTimer: ReturnType<typeof setTimeout> | null = null;
   private abort: AbortController | null = null;
   private attempts = 0;
+  private sentAt = -Infinity;
 
   constructor(private readonly controlOrigin: string, private readonly roomId: string,
     private readonly connectionToken: string, private readonly node: RelayNode,
@@ -20,6 +21,11 @@ export class RelayLink {
 
   send(packet: PeerPacket): void {
     if (this.ws?.readyState === WebSocket.OPEN && this.ping && this.ws.bufferedAmount < 64 * 1024) {
+      const now = performance.now();
+      // Inputs run at 60 Hz, but render/timer ticks can run much faster. Each
+      // packet repeats unacknowledged input, so skipping redundant ticks is safe.
+      if (now - this.sentAt < 1000 / 120) return;
+      this.sentAt = now;
       this.ws.send(JSON.stringify(packet));
     }
   }
@@ -66,6 +72,7 @@ export class RelayLink {
         if (message.t === "authenticated" && !this.ping) {
           if (this.authTimer) clearTimeout(this.authTimer);
           this.authTimer = null; this.attempts = 0;
+          this.sentAt = -Infinity;
           this.status({ nodeId: this.node.id, state: "open", rttMs: null });
           const probe = () => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "ping", ts: performance.now() })); };
           this.ping = setInterval(probe, 1000); probe();

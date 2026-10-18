@@ -3,7 +3,6 @@ import {
   NETPLAY_PING,
   NETPLAY_PONG,
   type ClientMessage,
-  type NetStatus,
   type RoomEndReason,
   type RoomErrorCode,
   type RollbackSession,
@@ -11,8 +10,9 @@ import {
   type ServerMessage,
   type PeerPacket,
   type RelaySelection,
-} from "@neslink/core";
-import { probeRelays } from "../relay-probes";
+} from "@neslink/core/netplay";
+import type { NetStatus } from "@neslink/core";
+import { probeRelays, summarizeProbe } from "../relay-probes";
 import { RelayLink, type RelayStatus } from "./relay-link";
 
 /** A seated player rolls back; a spectator follows confirmed inputs in lockstep. */
@@ -191,9 +191,7 @@ export class NetplayLink {
     try {
       const probes = await probeRelays(this.room.relay.nodes);
       // Measure the actual room socket, not a nearby Worker edge HTTP response.
-      const rtts = [...this.rtts].sort((a, b) => a - b);
-      probes.unshift({ nodeId: "main", rttMs: rtts.length ? Math.round(rtts[rtts.length >> 1]) : null,
-        jitterMs: rtts.length ? Math.round(rtts[rtts.length - 1] - rtts[0]) : null });
+      probes.unshift(summarizeProbe("main", this.rtts));
       if (!this.closed && !this.room?.started) this.send({ t: "relayProbes", probes });
     } finally { this.probing = false; }
   }
@@ -205,6 +203,7 @@ export class NetplayLink {
         this.connectionToken = message.connectionToken ?? null;
         this.updateRoom(message.room);
         void this.probe();
+        if (this.probeTimer !== null) clearInterval(this.probeTimer);
         this.probeTimer = setInterval(() => void this.probe(), 15_000);
         break;
       case "room":
