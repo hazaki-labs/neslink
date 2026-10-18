@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { KeyboardInput, MAX_PLAYERS, readGamepad } from "@neslink/core";
+import { IDLE_CONTROLLER, KeyboardInput, MAX_PLAYERS, mergeControllers, readGamepad } from "@neslink/core";
 import type { EmulatorClient } from "./emulator-client";
 
 /**
@@ -10,16 +10,16 @@ export function useControllerInput(client: EmulatorClient | null) {
   useEffect(() => {
     if (!client) return;
     const keyboard = new KeyboardInput();
-    const sent = new Array<number>(MAX_PLAYERS).fill(-1);
+    const sent = Array.from({ length: MAX_PLAYERS }, () => ({ held: -1, turbo: -1 }));
     let raf = 0;
 
     const sync = () => {
       const pads = (navigator.getGamepads?.() ?? []).filter((p): p is Gamepad => p !== null && p.connected);
       for (let port = 0; port < MAX_PLAYERS; port++) {
-        const mask = keyboard.mask(port) | (pads[port] ? readGamepad(pads[port]) : 0);
-        if (mask !== sent[port]) {
-          client.setInput(port, mask);
-          sent[port] = mask;
+        const state = mergeControllers(keyboard.state(port), pads[port] ? readGamepad(pads[port]) : IDLE_CONTROLLER);
+        if (state.held !== sent[port].held || state.turbo !== sent[port].turbo) {
+          client.setInput(port, state);
+          sent[port] = state;
         }
       }
     };
