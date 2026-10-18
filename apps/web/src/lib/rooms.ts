@@ -75,6 +75,15 @@ export function directLinkPolicy(): RTCIceTransportPolicy | null {
 
 const NAME_KEY = "neslink:name";
 
+/** Remember a new display name for rooms in this browser. */
+export function setPlayerName(name: string): void {
+  try {
+    localStorage.setItem(NAME_KEY, name);
+  } catch {
+    // Only this room hears about it then.
+  }
+}
+
 /** A display name for rooms, remembered per browser. */
 export function playerName(): string {
   try {

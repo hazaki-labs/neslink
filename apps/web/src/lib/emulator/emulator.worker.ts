@@ -21,7 +21,7 @@ import {
   RollbackSession,
   WasmCore,
 } from "@neslink/core";
-import { NetplayLink, type GameStart, type NetSession, type SimulatedNetwork } from "./netplay-link";
+import { NetplayLink, type GameStart, type NetSession, type RoomCredentials, type SimulatedNetwork } from "./netplay-link";
 
 const FRAME_MS = 1000 / NES_FRAME_RATE;
 
@@ -177,8 +177,11 @@ function tickPlayer(session: RollbackSession, due: number): boolean {
   while (owedFrames > 0 && session.canAdvance()) {
     const mask = localMask(session.frame);
     const localFrame = session.advance(mask);
-    link!.sendInput(localFrame, mask, session.localAdvantage());
-    peerHistory.push(localFrame, mask);
+    // Null right after a rejoin, while frames whose input we already sent come round.
+    if (localFrame !== null) {
+      link!.sendInput(localFrame, mask, session.localAdvantage());
+      peerHistory.push(localFrame, mask);
+    }
     owedFrames--;
     ran++;
   }
@@ -349,14 +352,16 @@ function startGame(game: GameStart): NetSession | null {
 
   let session: NetSession;
   if (game.localSeat === null) {
-    session = new LockstepSession(game.seats, null, game.delay, game.startFrame);
+    const lockstep = new LockstepSession(game.seats, null, game.delay, game.startFrame);
+    for (const [s, f, m] of game.inputs) lockstep.receive(s, f, m);
+    session = lockstep;
   } else {
     const rollback = new RollbackSession(game.seats, game.localSeat, game.delay, {
       save: (slot) => emulator.saveSlot(slot),
       load: (slot) => emulator.loadSlot(slot),
       run: (frameInputs, replay) => step(frameInputs, !replay),
       hash: () => emulator.stateHash(),
-    });
+    }, game.startFrame);
     const uploadsSnapshots = game.localSeat === game.seats[0];
     rollback.onFinal = (final, hash) => {
       const next = final + 1;
@@ -368,6 +373,14 @@ function startGame(game: GameStart): NetSession | null {
         link!.sendSnapshot(next, toBase64(bytes));
       }
     };
+    // Rejoining a game in progress: everything the room logged, ours included,
+    // then pick up right after our last input it has and run silently to there.
+    for (const [s, f, m] of game.inputs) rollback.seed(s, f, m);
+    for (const [f, m] of rollback.resume()) {
+      link!.sendInput(f, m);
+      peerHistory.push(f, m);
+    }
+    rollback.catchUp();
     session = rollback;
   }
   post({ type: "netStarted", seat: game.localSeat, delay: game.delay });
@@ -376,7 +389,14 @@ function startGame(game: GameStart): NetSession | null {
   return session;
 }
 
-function joinRoom(url: string, name: string, romHash: string, simulated: SimulatedNetwork | null, port: MessagePort | null) {
+function joinRoom(
+  url: string,
+  name: string,
+  romHash: string,
+  simulated: SimulatedNetwork | null,
+  port: MessagePort | null,
+  resume: RoomCredentials | null,
+) {
   link?.close();
   peerPort?.close();
   peerPort = port;
@@ -395,7 +415,9 @@ function joinRoom(url: string, name: string, romHash: string, simulated: Simulat
     onSignal: (from, data) => post({ type: "netSignal", from, data }),
     onRelayPacket: onPeerPacket,
     onRelayStatus: (status) => post({ type: "netRelayStatus", ...status }),
-  }, simulated);
+    onCredentials: (credentials) => post({ type: "netCredentials", ...credentials }),
+    onReaction: (from, kind) => post({ type: "netReaction", from, kind }),
+  }, simulated, resume);
 }
 
 async function handle(message: ToWorker) {
@@ -451,7 +473,7 @@ async function handle(message: ToWorker) {
       if (running()) start();
       break;
     case "netJoin":
-      joinRoom(message.url, message.name, message.romHash, message.simulated, message.peerPort);
+      joinRoom(message.url, message.name, message.romHash, message.simulated, message.peerPort, message.resume);
       break;
     case "netStart":
       link?.requestStart();
@@ -461,6 +483,12 @@ async function handle(message: ToWorker) {
       break;
     case "netSignal":
       link?.sendSignal(message.to, message.data);
+      break;
+    case "netRename":
+      link?.rename(message.name);
+      break;
+    case "netReact":
+      link?.react(message.kind);
       break;
     case "peerRtt":
       link?.setDirectRtt(message.ms);

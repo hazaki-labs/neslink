@@ -233,7 +233,7 @@ describe("RollbackSession rejoin", () => {
     const expected = new FakeGame();
     const hashes: number[] = [];
     for (let f = 0; f < 600; f++) {
-      expected.run(truth.get(f) ?? [0, 0]);
+      expected.run(truth.get(f) ?? [0, 0], false);
       hashes.push(expected.hash());
     }
     expect(a.finals.size).toBeGreaterThan(500);

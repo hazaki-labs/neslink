@@ -39,6 +39,7 @@ export class EmulatorClient {
   private nextRequestId = 1;
   private destroyed = false;
   private peer: PeerLink | null = null;
+  private roomUrl: string | null = null;
 
   constructor(private readonly events: EmulatorEvents = {}) {
     this.canvas = document.createElement("canvas");
@@ -106,7 +107,18 @@ export class EmulatorClient {
         direct,
       );
     }
-    this.send({ type: "netJoin", url, name, romHash, simulated, peerPort }, peerPort ? [peerPort] : []);
+    this.roomUrl = url;
+    this.send({ type: "netJoin", url, name, romHash, simulated, peerPort, resume: loadCredentials(url) }, peerPort ? [peerPort] : []);
+  }
+
+  /** Change our display name in the room. */
+  rename(name: string): void {
+    this.send({ type: "netRename", name });
+  }
+
+  /** Send everyone in the room a thumbs-up. */
+  react(): void {
+    this.send({ type: "netReact", kind: "thumbs" });
   }
 
   startRoom(): void {
@@ -210,10 +222,16 @@ export class EmulatorClient {
       case "netSignal":
         void this.peer?.handleSignal(message.from, message.data);
         break;
+      case "netCredentials":
+        if (this.roomUrl) saveCredentials(this.roomUrl, { id: message.id, token: message.token });
+        break;
       case "netRoom": {
         // Link directly to the other seated player, if we sit and exactly one other does.
+        // Someone reconnecting counts as gone: their link is rebuilt once they are back.
         const me = message.room.players.find((p) => p.id === message.you);
-        const others = message.room.players.filter((p) => p.seat !== null && p.id !== message.you);
+        const others = message.room.players.filter(
+          (p) => p.seat !== null && p.id !== message.you && p.connected !== false,
+        );
         this.peer?.setPeer(message.you, me?.seat != null && others.length === 1 ? others[0].id : null);
         this.events.onNet?.(message);
         break;
@@ -221,5 +239,30 @@ export class EmulatorClient {
       default:
         this.events.onNet?.(message);
     }
+  }
+}
+
+/**
+ * Room identity per tab (sessionStorage): a refresh rejoins as the same player,
+ * while a second tab is a new one.
+ */
+function credentialsKey(url: string) {
+  return `neslink:resume:${url}`;
+}
+
+function loadCredentials(url: string): { id: string; token: string } | null {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(credentialsKey(url)) ?? "null") as { id?: unknown; token?: unknown } | null;
+    return saved && typeof saved.id === "string" && typeof saved.token === "string" ? { id: saved.id, token: saved.token } : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCredentials(url: string, credentials: { id: string; token: string }) {
+  try {
+    sessionStorage.setItem(credentialsKey(url), JSON.stringify(credentials));
+  } catch {
+    // Not kept across a refresh; dropping and coming back without one still works.
   }
 }

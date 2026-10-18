@@ -1,4 +1,4 @@
-import type { RoomEndReason, RoomErrorCode, RoomState } from "./netplay/protocol";
+import type { ReactionKind, RoomEndReason, RoomErrorCode, RoomState } from "./netplay/protocol";
 import type { RelaySelection } from "./netplay/relay";
 
 /** Messages between the UI thread and the emulator worker. */
@@ -31,7 +31,11 @@ export type ToWorker =
       simulated: { lagMs: number; jitterMs: number } | null;
       /** Port to the UI thread's direct (WebRTC) link to the other player, if any. */
       peerPort: MessagePort | null;
+      /** Who this tab was in the room before a refresh, to rejoin as. */
+      resume: { id: string; token: string } | null;
     }
+  | { type: "netRename"; name: string }
+  | { type: "netReact"; kind: ReactionKind }
   /** Round trip over the direct link, or null when there is none (reported to the room). */
   | { type: "peerRtt"; ms: number | null }
   /** WebRTC signaling from the UI thread, for the room to relay to player `to`. */
@@ -43,7 +47,8 @@ export type ToWorker =
   | { type: "netSeat"; seat: number | null }
   | { type: "netLeave" };
 
-export type NetStatus = "connecting" | "open" | "closed";
+/** "reconnecting": the socket dropped and we are trying to get our seat back. */
+export type NetStatus = "connecting" | "open" | "reconnecting" | "closed";
 
 export type FromWorker =
   | { type: "netRelayStatus"; nodeId: string; state: "connecting" | "open" | "failed"; rttMs: number | null }
@@ -82,7 +87,10 @@ export type FromWorker =
   | { type: "netDesync"; frame: number }
   | { type: "netError"; code: RoomErrorCode }
   /** WebRTC signaling relayed by the room from player `from`. */
-  | { type: "netSignal"; from: string; data: unknown };
+  | { type: "netSignal"; from: string; data: unknown }
+  /** Our identity in the room, for the UI thread to keep (per tab) and rejoin with. */
+  | { type: "netCredentials"; id: string; token: string }
+  | { type: "netReaction"; from: string; kind: ReactionKind };
 
 /** Messages from the worker to the AudioWorklet. `samples` is mono. */
 export type ToAudio = { type: "samples"; samples: Float32Array<ArrayBuffer> } | { type: "flush" };
