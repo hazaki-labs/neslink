@@ -32,7 +32,7 @@ The compiled WASM in `packages/nes-wasm/pkg` is checked in, so frontend-only wor
 pnpm build:wasm
 ```
 
-To try netplay at a given latency on one machine, add `?lag=150&jitter=30` (milliseconds) to a room URL: that tab's server connection gets that much extra round trip and random jitter (the latency readout includes it). Add `?p2p=0` to keep a tab off the direct link, to compare, or `?p2p=relay` to allow only TURN-relayed routes (checks that TURN works; the link fails without TURN configured).
+To try netplay at a given latency on one machine, add `?lag=150&swing=30` (milliseconds) to a room URL: that tab's server connection gets that much extra round trip, plus up to `swing` ms of random extra (the latency readout includes it). Add `?route=room` to keep a tab off the direct link and play through the room server, to compare, or `?route=transit` to allow only routes through the TURN transit nodes (checks that TURN works; the link fails without TURN configured).
 
 ```bash
 pnpm install

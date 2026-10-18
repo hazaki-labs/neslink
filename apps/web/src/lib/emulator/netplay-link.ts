@@ -44,7 +44,7 @@ export interface NetplayEvents {
   onSignal(from: string, data: unknown): void;
 }
 
-/** Extra latency to simulate on this link (dev tool, from `?lag=` / `?jitter=`). */
+/** Extra latency to simulate on this link (dev tool, from `?lag=` / `?swing=`). */
 export interface SimulatedNetwork {
   /** Added round trip, split evenly between the two directions. */
   lagMs: number;
