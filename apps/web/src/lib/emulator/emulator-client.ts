@@ -79,14 +79,15 @@ export class EmulatorClient {
 
   /**
    * `simulated`: dev tool, extra latency to add to this player's server link.
-   * `direct`: also try a WebRTC link straight to the other player (on by default).
+   * `direct`: also try a WebRTC link straight to the other player (on by default),
+   * with this ICE transport policy; null for no direct link.
    */
   joinRoom(
     url: string,
     name: string,
     romHash: string,
     simulated: { lagMs: number; jitterMs: number } | null = null,
-    direct = typeof RTCPeerConnection === "function",
+    direct: RTCIceTransportPolicy | null = typeof RTCPeerConnection === "function" ? "all" : null,
   ): void {
     this.peer?.dispose();
     this.peer = null;
@@ -101,6 +102,7 @@ export class EmulatorClient {
           this.send({ type: "peerRtt", ms: status.state === "open" ? status.rttMs : null });
           this.events.onPeer?.(status);
         },
+        direct,
       );
     }
     this.send({ type: "netJoin", url, name, romHash, simulated, peerPort }, peerPort ? [peerPort] : []);
