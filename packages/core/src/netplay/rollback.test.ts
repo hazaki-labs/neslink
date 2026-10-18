@@ -74,7 +74,7 @@ function play(ticks: number, delay: number, latency: (tick: number) => number, s
       for (let n = 0; n < self.speed && self.session.canAdvance(); n++) {
         const frame = self.session.frame;
         const mask = self.press(frame);
-        const localFrame = self.session.advance(mask);
+        const localFrame = self.session.advance(mask)!;
         const entry = truth.get(localFrame) ?? [0, 0];
         entry[seat] = mask;
         truth.set(localFrame, entry);
@@ -163,5 +163,85 @@ describe("RollbackSession", () => {
     expect(s.slotBefore(20)).toBeNull();
     expect(s.slotBefore(19)).toBe(19 % ROLLBACK_SLOTS);
     expect(() => s.slotBefore(5)).toThrow();
+  });
+});
+
+describe("RollbackSession rejoin", () => {
+  it("lets a dropped player rejoin from the room's snapshot and log", () => {
+    const delay = 2;
+    const SNAP = 100;
+    // The room: every input it has seen, and the newest snapshot (state before frame f).
+    let log: [number, number, number][] = [];
+    let snapshot: { f: number; state: number } | null = null;
+    const truth = new Map<number, [number, number]>();
+    const record = (seat: number, frame: number, mask: number) => {
+      const entry = truth.get(frame) ?? [0, 0];
+      entry[seat] = mask;
+      truth.set(frame, entry);
+      log.push([seat, frame, mask]);
+    };
+
+    const make = (seat: number, game: FakeGame, start = 0) => {
+      const session = new RollbackSession([0, 1], seat, delay, game, start);
+      const finals = new Map<number, number>();
+      session.onFinal = (frame, hash) => {
+        finals.set(frame, hash);
+        // Seat 0 keeps the room's snapshot fresh, from final frames only.
+        if (seat === 0 && (frame + 1) % SNAP === 0) {
+          const slot = session.slotBefore(frame + 1);
+          const state = slot === null ? game.state : game.slots.get(slot)!;
+          snapshot = { f: frame + 1, state };
+          log = log.filter(([, f]) => f >= frame + 1);
+        }
+      };
+      return { seat, game, session, finals, online: true };
+    };
+    const a = make(0, new FakeGame());
+    let b = make(1, new FakeGame());
+    const oldB = b;
+    const inFlight: { at: number; to: 0 | 1; seat: number; frame: number; mask: number }[] = [];
+    const send = (from: typeof a, tick: number, frame: number, mask: number) => {
+      record(from.seat, frame, mask);
+      inFlight.push({ at: tick + 2, to: (1 - from.seat) as 0 | 1, seat: from.seat, frame, mask });
+    };
+
+    for (let tick = 0; tick < 700; tick++) {
+      if (tick === 300) b.online = false; // B's tab closes
+      if (tick === 330) {
+        // B comes back: snapshot + log from the room, then resume where the room left off.
+        const game = new FakeGame();
+        game.state = snapshot!.state;
+        b = make(1, game, snapshot!.f);
+        for (const [s, f, m] of log) b.session.seed(s, f, m);
+        for (const [f, m] of b.session.resume()) send(b, tick, f, m);
+        b.session.catchUp();
+      }
+      for (const msg of inFlight.filter((m) => m.at === tick)) {
+        const to = msg.to === 0 ? a : b;
+        if (to.online) to.session.receive(msg.seat, msg.frame, msg.mask);
+      }
+      for (const peer of [a, b]) {
+        if (!peer.online) continue;
+        peer.session.resolve();
+        if (!peer.session.canAdvance()) continue;
+        const mask = (peer.session.frame * (peer.seat + 3)) % 7;
+        const frame = peer.session.advance(mask);
+        if (frame !== null) send(peer, tick, frame, mask);
+      }
+    }
+
+    const expected = new FakeGame();
+    const hashes: number[] = [];
+    for (let f = 0; f < 600; f++) {
+      expected.run(truth.get(f) ?? [0, 0], false);
+      hashes.push(expected.hash());
+    }
+    expect(a.finals.size).toBeGreaterThan(500);
+    expect(b.finals.size).toBeGreaterThan(200);
+    for (const [f, h] of a.finals) if (f < 600) expect(h).toBe(hashes[f]);
+    for (const [f, h] of b.finals) if (f < 600) expect(h).toBe(hashes[f]);
+    for (const [f, h] of oldB.finals) if (f < 600) expect(h).toBe(hashes[f]);
+    // Both sides finished the same game.
+    expect(Math.abs(a.session.frame - b.session.frame)).toBeLessThanOrEqual(MAX_ROLLBACK + 4);
   });
 });

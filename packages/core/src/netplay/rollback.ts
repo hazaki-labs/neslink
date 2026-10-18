@@ -59,24 +59,35 @@ export class RollbackSession {
   private readonly hashes = new Array<number>(ROLLBACK_SLOTS).fill(0);
   private finalized = 0;
   private rollbackFrom: number | null = null;
+  /** Where local play picks up after a resume (see `resume`). */
+  private resumeAt = 0;
   private remoteAdvantage = 0;
   private sinceYield = 0;
   private readonly stats: RollbackStats = { rollbacks: 0, replayedFrames: 0 };
 
+  /**
+   * `startFrame` > 0 resumes a game in progress from a snapshot taken before
+   * that frame: `seed` the room's logged inputs, then `resume()` and `catchUp()`.
+   */
   constructor(
     readonly activeSeats: readonly number[],
     readonly localSeat: number,
     readonly delay: number,
     private readonly host: RollbackHost,
+    startFrame = 0,
   ) {
     if (!activeSeats.includes(localSeat)) throw new Error(`Local seat ${localSeat} is not active`);
+    this.next = startFrame;
+    this.finalized = startFrame;
+    this.resumeAt = startFrame;
     for (const seat of activeSeats) {
-      // Nobody has input for the first `delay` frames of a game from power-on.
       const inputs = new Map<number, number>();
-      for (let frame = 0; frame < delay; frame++) inputs.set(frame, 0);
+      // Nobody has input for the first `delay` frames of a game from power-on.
+      const implicit = startFrame === 0 ? delay : 0;
+      for (let frame = 0; frame < implicit; frame++) inputs.set(frame, 0);
       this.confirmed.set(seat, inputs);
-      this.contiguous.set(seat, delay - 1);
-      this.newest.set(seat, delay - 1);
+      this.contiguous.set(seat, startFrame + implicit - 1);
+      this.newest.set(seat, startFrame + implicit - 1);
     }
   }
 
@@ -110,6 +121,58 @@ export class RollbackSession {
     if (ran && ran[seat] !== mask) {
       this.rollbackFrom = this.rollbackFrom === null ? frame : Math.min(this.rollbackFrom, frame);
     }
+  }
+
+  /**
+   * Record an input logged by the room for any seat, ours included: used when
+   * rejoining a game, before `resume()`. Frames already run are ignored.
+   */
+  seed(seat: number, frame: number, mask: number): void {
+    const inputs = this.confirmed.get(seat);
+    if (!inputs || frame < this.next || inputs.has(frame) || frame <= this.contiguous.get(seat)!) return;
+    inputs.set(frame, mask);
+    this.newest.set(seat, Math.max(this.newest.get(seat)!, frame));
+    let contiguous = this.contiguous.get(seat)!;
+    while (inputs.has(contiguous + 1)) contiguous++;
+    this.contiguous.set(seat, contiguous);
+  }
+
+  /**
+   * After seeding a rejoin: pick up right after our last input the room has,
+   * so nothing we already sent changes. Inputs of ours the others never got
+   * (the gap before that point) become neutral; they are returned, frame and
+   * mask, for the caller to send. A fresh game returns nothing.
+   */
+  resume(): [frame: number, mask: number][] {
+    const own = this.contiguous.get(this.localSeat)!;
+    this.resumeAt = Math.max(this.next, own + 1 - this.delay);
+    const filled: [number, number][] = [];
+    const inputs = this.confirmed.get(this.localSeat)!;
+    for (let frame = own + 1; frame < this.resumeAt + this.delay; frame++) {
+      inputs.set(frame, 0);
+      filled.push([frame, 0]);
+    }
+    if (filled.length > 0) {
+      this.contiguous.set(this.localSeat, this.resumeAt + this.delay - 1);
+      this.newest.set(this.localSeat, Math.max(this.newest.get(this.localSeat)!, this.resumeAt + this.delay - 1));
+    }
+    return filled;
+  }
+
+  /**
+   * Silently run every frame up to the resume point whose inputs are all known
+   * (catching up a rejoin). Returns frames run; stops early at a gap in the
+   * others' inputs, which normal play then predicts as usual.
+   */
+  catchUp(): number {
+    let ran = 0;
+    while (this.next < this.resumeAt && [...this.confirmed.values()].every((inputs) => inputs.has(this.next))) {
+      this.runFrame(this.next, true);
+      this.next++;
+      ran++;
+    }
+    this.finalize();
+    return ran;
   }
 
   /** The other player's view of how far ahead of us they are, for time sync. */
@@ -168,15 +231,21 @@ export class RollbackSession {
   /**
    * Run the next frame with the local input pressed now. Call `resolve()`
    * first and only when `canAdvance()`. Returns the frame the local input was
-   * scheduled for, to send it.
+   * scheduled for, to send it, or null when that frame's input was already
+   * settled (just after a rejoin).
    */
-  advance(localMask: number): number {
+  advance(localMask: number): number | null {
     if (this.rollbackFrom !== null) throw new Error("Resolve the pending rollback first");
     if (!this.canAdvance()) throw new Error(`Frame ${this.next} is past the rollback window`);
-    const localFrame = this.next + this.delay;
-    this.confirmed.get(this.localSeat)!.set(localFrame, localMask);
-    this.contiguous.set(this.localSeat, localFrame);
-    this.newest.set(this.localSeat, localFrame);
+    let localFrame: number | null = this.next + this.delay;
+    const local = this.confirmed.get(this.localSeat)!;
+    if (local.has(localFrame)) {
+      localFrame = null;
+    } else {
+      local.set(localFrame, localMask);
+      this.contiguous.set(this.localSeat, localFrame);
+      this.newest.set(this.localSeat, localFrame);
+    }
     this.runFrame(this.next, false);
     this.next++;
     this.finalize();

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Copy, Crown, Eye, Play } from "lucide-react";
+import { Check, Copy, Crown, Eye, Pencil, Play } from "lucide-react";
 import {
   chooseNetplayDelay,
   NES_FRAME_RATE,
@@ -24,12 +24,16 @@ interface Props {
   /** Sit in a seat, or stand up to spectate (null). */
   onSeat: (seat: number | null) => void;
   onRelaySelect: (selection: RelaySelection) => void;
+  /** Change our display name. */
+  onRename: (name: string) => void;
 }
 
 /** Overlay on the game screen while a room waits for players or between games. */
-export function RoomLobby({ status, room, you, notice, onStart, onSeat, onRelaySelect }: Props) {
+export function RoomLobby({ status, room, you, notice, onStart, onSeat, onRelaySelect, onRename }: Props) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  /** The name being typed, while editing ours. */
+  const [draft, setDraft] = useState<string | null>(null);
   const me = room?.players.find((p) => p.id === you) ?? null;
   const isHost = room !== null && room.hostId === you;
   const romMatches = me !== null && room !== null && me.romHash === room.info.romHash;
@@ -60,9 +64,45 @@ export function RoomLobby({ status, room, you, notice, onStart, onSeat, onRelayS
         </div>
 
         {status !== "open" ? (
-          <p className="text-sm text-white/70">{status === "connecting" ? t.lobby.connecting : t.lobby.disconnected}</p>
+          <p className="text-sm text-white/70">
+            {status === "connecting" ? t.lobby.connecting : status === "reconnecting" ? t.lobby.reconnecting : t.lobby.disconnected}
+          </p>
         ) : (
           <>
+            {me && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-white/60">{t.lobby.yourName}</span>
+                {draft === null ? (
+                  <button
+                    type="button"
+                    className="flex min-w-0 items-center gap-1.5 rounded px-1 hover:bg-white/10"
+                    title={t.lobby.rename}
+                    onClick={() => setDraft(me.name)}
+                  >
+                    <span className="truncate">{me.name}</span>
+                    <Pencil className="size-3 shrink-0 text-white/50" />
+                  </button>
+                ) : (
+                  <input
+                    autoFocus
+                    maxLength={20}
+                    value={draft}
+                    aria-label={t.lobby.rename}
+                    className="min-w-0 flex-1 rounded bg-white/10 px-2 py-0.5 outline-none focus:ring-1 focus:ring-white/40"
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setDraft(null);
+                      if (e.key === "Enter") e.currentTarget.blur();
+                    }}
+                    onBlur={() => {
+                      const name = draft.trim();
+                      if (name && name !== me.name) onRename(name);
+                      setDraft(null);
+                    }}
+                  />
+                )}
+              </div>
+            )}
             <ul className="flex flex-col gap-1.5">
               {Array.from({ length: NETPLAY_SEATS }, (_, seat) => {
                 const player = room?.players.find((p) => p.seat === seat);
@@ -75,6 +115,7 @@ export function RoomLobby({ status, room, you, notice, onStart, onSeat, onRelayS
                           <span className="truncate">{player.name}</span>
                           {player.id === room?.hostId && <Crown className="size-3.5 shrink-0 text-amber-300" aria-label={t.lobby.host} />}
                           {player.id === you && <span className="shrink-0 text-white/50">{t.lobby.you}</span>}
+                          {player.connected === false && <span className="shrink-0 text-amber-300">{t.lobby.away}</span>}
                         </span>
                         <span className="ml-auto font-mono text-xs text-white/50 tabular-nums">
                           {player.rttMs !== null ? `${player.rttMs}ms` : t.lobby.measuring}
