@@ -25,8 +25,12 @@ accepted only on loopback for development. There can be at most 16 external node
 Configuration is cached until its value changes. Invalid metadata disables external
 nodes and logs a configuration error; rooms continue using the built-in route.
 
-Use `apps/server/wrangler.jsonc` → `vars` for public metadata. Store the corresponding
-signing material as the **Worker secret** `RELAY_SIGNING_KEYS`, not in `vars` or Git:
+Set `RELAY_NODES` (and `RELAY_ALLOW_INSECURE`, if used) as plaintext variables in the
+Cloudflare dashboard (Worker → Settings → Variables and Secrets), not in
+`apps/server/wrangler.jsonc`. The config sets `keep_vars: true`, so `wrangler deploy`
+leaves dashboard variables alone; adding a same-named entry to `vars` would override them.
+Unset, `RELAY_NODES` behaves as `[]`. Store the corresponding signing material as the
+**Worker secret** `RELAY_SIGNING_KEYS`, never in variables or Git:
 
 ```sh
 pnpm --filter @neslink/server exec wrangler secret put RELAY_SIGNING_KEYS
