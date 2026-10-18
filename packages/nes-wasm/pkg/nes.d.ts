@@ -15,6 +15,10 @@ export class Nes {
      */
     framePtr(): number;
     loadRom(name: string, rom: Uint8Array): void;
+    /**
+     * Restores rollback slot `slot`, saved earlier on this machine by [`Nes::save_slot`].
+     */
+    loadSlot(slot: number): void;
     loadState(state: Uint8Array): void;
     constructor(sample_rate: number);
     reset(): void;
@@ -23,10 +27,19 @@ export class Nes {
      */
     runFrame(p1: number, p2: number): void;
     /**
+     * Saves the console into rollback slot `slot` (slots grow as needed).
+     */
+    saveSlot(slot: number): void;
+    /**
      * Serializes the console into an internal buffer; returns its length.
      * Read it from [`Nes::state_ptr`]. Uncompressed, so it is fast enough for rollback.
      */
     saveState(): number;
+    slotLen(slot: number): number;
+    /**
+     * Address and length of rollback slot `slot`, to copy out (e.g. as a spectator snapshot).
+     */
+    slotPtr(slot: number): number;
     statePtr(): number;
     /**
      * FNV-1a hash of the 2KB work RAM, for netplay desync checks. Unlike the full
@@ -44,11 +57,15 @@ export interface InitOutput {
     readonly nes_drainAudio: (a: number) => number;
     readonly nes_framePtr: (a: number) => number;
     readonly nes_loadRom: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly nes_loadSlot: (a: number, b: number) => [number, number];
     readonly nes_loadState: (a: number, b: number, c: number) => [number, number];
     readonly nes_new: (a: number) => number;
     readonly nes_reset: (a: number) => void;
     readonly nes_runFrame: (a: number, b: number, c: number) => [number, number];
+    readonly nes_saveSlot: (a: number, b: number) => [number, number];
     readonly nes_saveState: (a: number) => [number, number, number];
+    readonly nes_slotLen: (a: number, b: number) => number;
+    readonly nes_slotPtr: (a: number, b: number) => number;
     readonly nes_statePtr: (a: number) => number;
     readonly nes_wramHash: (a: number) => number;
     readonly __wbindgen_malloc: (a: number, b: number) => number;

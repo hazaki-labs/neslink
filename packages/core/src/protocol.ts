@@ -20,7 +20,20 @@ export type ToWorker =
   /** Whether the page is hidden; netplay keeps running on a timer when it is. */
   | { type: "visibility"; hidden: boolean }
   /** Connect to a netplay room; the worker owns the socket so inputs skip the UI thread. */
-  | { type: "netJoin"; url: string; name: string; romHash: string }
+  | {
+      type: "netJoin";
+      url: string;
+      name: string;
+      romHash: string;
+      /** Dev tool: extra latency to simulate on this player's link. */
+      simulated: { lagMs: number; jitterMs: number } | null;
+      /** Port to the UI thread's direct (WebRTC) link to the other player, if any. */
+      peerPort: MessagePort | null;
+    }
+  /** Round trip over the direct link, or null when there is none (reported to the room). */
+  | { type: "peerRtt"; ms: number | null }
+  /** WebRTC signaling from the UI thread, for the room to relay to player `to`. */
+  | { type: "netSignal"; to: string; data: unknown }
   /** Host only: ask the room to start. */
   | { type: "netStart" }
   /** Lobby: sit in a seat, or null to spectate. */
@@ -44,6 +57,13 @@ export type FromWorker =
       unevenFrames: number;
       /** Netplay: refreshes in this window spent waiting for the other player's input. */
       netWaits: number;
+      /** Netplay rollback: corrections and frames re-simulated in this window. */
+      rollbacks: number;
+      replayedFrames: number;
+      /** Netplay rollback: frames we may run ahead of the other player, sized to this device. */
+      rollbackWindow: number | null;
+      /** Smoothed time to emulate one frame on this device, in ms. */
+      frameCostMs: number;
     }
   | { type: "state"; requestId: number; state: Uint8Array<ArrayBuffer> }
   /** `kind` says what failed; `message` is the underlying (untranslated) detail. */
@@ -56,7 +76,9 @@ export type FromWorker =
   | { type: "netPing"; rttMs: number }
   | { type: "netEnded"; reason: RoomEndReason }
   | { type: "netDesync"; frame: number }
-  | { type: "netError"; code: RoomErrorCode };
+  | { type: "netError"; code: RoomErrorCode }
+  /** WebRTC signaling relayed by the room from player `from`. */
+  | { type: "netSignal"; from: string; data: unknown };
 
 /** Messages from the worker to the AudioWorklet. `samples` is mono. */
 export type ToAudio = { type: "samples"; samples: Float32Array<ArrayBuffer> } | { type: "flush" };

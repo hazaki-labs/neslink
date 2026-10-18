@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  chooseInputDelay,
+  chooseNetplayDelay,
   NETPLAY_PING,
   NETPLAY_PONG,
   NETPLAY_SEATS,
@@ -19,6 +19,8 @@ const MAX_CONNECTIONS = 16;
 const MAX_LOGGED_INPUTS = 900_000;
 /** Base64 of a save state is ~30KB; anything far larger is not one. */
 const MAX_SNAPSHOT_CHARS = 512 * 1024;
+/** SDP offers with many candidates run a few KB; this is generous. */
+const MAX_SIGNAL_CHARS = 32 * 1024;
 
 /** Per-socket player data. Stored on the socket so it survives hibernation. */
 interface Attachment extends RoomPlayer {
@@ -114,7 +116,8 @@ export class Room extends DurableObject<Env> {
       case "input":
         if (this.playing(me) && isFrame(message.f) && isMask(message.m)) {
           this.logInput(me.seat, message.f, message.m);
-          this.broadcast({ t: "input", s: me.seat, f: message.f, m: message.m }, ws);
+          const a = Number.isInteger(message.a) ? message.a : undefined;
+          this.broadcast({ t: "input", s: me.seat, f: message.f, m: message.m, a }, ws);
         }
         break;
       case "hash":
@@ -127,9 +130,14 @@ export class Room extends DurableObject<Env> {
           this.storeSnapshot(me.seat, message.f, message.s);
         }
         break;
+      case "signal":
+        if (me && typeof message.to === "string") this.relaySignal(me, message.to, message.data);
+        break;
       case "rtt":
         if (me && Number.isFinite(message.ms) && message.ms >= 0 && message.ms < 10_000) {
           me.rttMs = Math.round(message.ms);
+          const direct = message.direct;
+          me.directRttMs = typeof direct === "number" && Number.isFinite(direct) && direct >= 0 && direct < 10_000 ? Math.round(direct) : null;
           ws.serializeAttachment(me);
           // Shown in the lobby; during a game nobody looks, so skip the chatter.
           if (!this.started) this.broadcast({ t: "room", room: this.state() });
@@ -167,6 +175,7 @@ export class Room extends DurableObject<Env> {
       seat,
       romHash: hash,
       rttMs: null,
+      directRttMs: null,
       joinedAt: Date.now(),
     };
     ws.serializeAttachment(me);
@@ -216,8 +225,9 @@ export class Room extends DurableObject<Env> {
     if (this.started) return;
     const seated = this.players().filter((p) => p.seat !== null);
     if (seated.length === 0) return this.send(ws, { t: "error", code: "noPlayers" });
-    // Just enough delay for an input to cross between the players, measured now.
-    const delay = chooseInputDelay(seated.map((p) => p.rttMs));
+    // Players roll back, so a small delay (from latency measured now, over a
+    // direct link if both have one) is enough; prediction covers the rest.
+    const delay = chooseNetplayDelay(seated);
     const seats = seated.map((p) => p.seat!).sort((a, b) => a - b);
     this.game = { delay, seats, snapshot: null, log: [] };
     this.started = true;
@@ -251,6 +261,14 @@ export class Room extends DurableObject<Env> {
       await this.ctx.storage.setAlarm(Date.now() + IDLE_TTL_MS);
     }
     this.broadcast({ t: "room", room: this.state() }, ws);
+  }
+
+  /** Pass WebRTC signaling between two people in the room, so players can connect directly. */
+  private relaySignal(me: Attachment, to: string, data: unknown) {
+    if (JSON.stringify(data ?? null).length > MAX_SIGNAL_CHARS) return;
+    for (const ws of this.ctx.getWebSockets()) {
+      if (this.player(ws)?.id === to) return this.send(ws, { t: "signal", from: me.id, data });
+    }
   }
 
   private logInput(seat: number, frame: number, mask: number) {
@@ -300,7 +318,14 @@ export class Room extends DurableObject<Env> {
       info: this.info!,
       hostId: this.hostId,
       started: this.started,
-      players: this.players().map(({ id, name, seat, romHash, rttMs }) => ({ id, name, seat, romHash, rttMs })),
+      players: this.players().map(({ id, name, seat, romHash, rttMs, directRttMs }) => ({
+        id,
+        name,
+        seat,
+        romHash,
+        rttMs,
+        directRttMs: directRttMs ?? null,
+      })),
     };
   }
 

@@ -11,9 +11,15 @@ import {
 } from "@neslink/core";
 import { Button } from "@/components/ui/button";
 import { useI18n, type Messages } from "@/i18n";
-import { EmulatorClient, type EmulatorError, type EmulatorStats, type NetEvent } from "@/lib/emulator/emulator-client";
+import {
+  EmulatorClient,
+  type EmulatorError,
+  type EmulatorStats,
+  type NetEvent,
+  type PeerStatus,
+} from "@/lib/emulator/emulator-client";
 import { useControllerInput } from "@/lib/emulator/use-controller-input";
-import { playerName, roomSocketUrl } from "@/lib/rooms";
+import { directLinkPolicy, playerName, roomSocketUrl, simulatedNetwork } from "@/lib/rooms";
 import { getSave, putSave, type StoredRom } from "@/lib/storage";
 import { RoomLobby } from "./room-lobby";
 
@@ -63,6 +69,13 @@ function applyNetEvent(view: NetView, event: NetEvent): NetView {
   }
 }
 
+/** How our inputs reach the other player right now. */
+function peerLabel(t: Messages, peer: PeerStatus): string {
+  if (peer.state === "open") return peer.rttMs === null ? t.player.direct : t.player.directRtt(Math.round(peer.rttMs));
+  if (peer.state === "connecting") return t.player.directConnecting;
+  return t.player.relayed;
+}
+
 function describeError(t: Messages, error: EmulatorError): string {
   switch (error.kind) {
     case "emulationStopped":
@@ -88,6 +101,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
   const [message, setMessage] = useState<Text | null>(null);
   const [hasSave, setHasSave] = useState(false);
   const [net, setNet] = useState<NetView>(INITIAL_NET);
+  const [peer, setPeer] = useState<PeerStatus>({ state: "off", rttMs: null });
 
   function flash(text: Text, ms = 2000) {
     setMessage(() => text);
@@ -99,6 +113,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     const emulator: EmulatorClient = new EmulatorClient({
       onReady: () => setClient(emulator),
       onStats: setStats,
+      onPeer: setPeer,
       onError: (error) => setMessage(() => (t: Messages) => describeError(t, error)),
       onNet: (event) => {
         if (event.type === "netDesync") flash((t) => t.player.desync(event.frame), 5000);
@@ -111,7 +126,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     const stopFitting = fitIntegerScale(screen, emulator.canvas);
     if (roomId) {
       emulator.loadRom(rom.data, false);
-      emulator.joinRoom(roomSocketUrl(roomId), playerName(), rom.hash);
+      emulator.joinRoom(roomSocketUrl(roomId), playerName(), rom.hash, simulatedNetwork(), directLinkPolicy());
     } else {
       emulator.loadRom(rom.data);
     }
@@ -181,17 +196,23 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
             title={t.player.latencyTitle}
           >
             {t.player.network(Math.round(net.rttMs))}
+            {simulatedNetwork() && ` ${t.player.simulated}`}
             {net.playing &&
               net.seat !== null &&
               net.delayFrames !== null &&
               ` · ${t.player.inputDelay(net.delayFrames, NES_FRAME_RATE)}`}
+            {net.playing && net.seat !== null && ` · ${peerLabel(t, peer)}`}
           </span>
         )}
         <span
           className="font-mono text-xs text-muted-foreground tabular-nums"
           title={
             stats
-              ? t.player.statsTitle(stats.unevenFrames) + (roomId ? t.player.statsNetTitle(stats.netWaits) : "")
+              ? t.player.statsTitle(stats.unevenFrames, stats.frameCostMs) +
+                (roomId ? t.player.statsNetTitle(stats.netWaits) : "") +
+                (stats.rollbackWindow !== null
+                  ? t.player.statsRollbackTitle(stats.rollbacks, stats.replayedFrames, stats.rollbackWindow)
+                  : "")
               : undefined
           }
         >

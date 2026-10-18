@@ -50,6 +50,16 @@ export class Nes {
         }
     }
     /**
+     * Restores rollback slot `slot`, saved earlier on this machine by [`Nes::save_slot`].
+     * @param {number} slot
+     */
+    loadSlot(slot) {
+        const ret = wasm.nes_loadSlot(this.__wbg_ptr, slot);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @param {Uint8Array} state
      */
     loadState(state) {
@@ -84,6 +94,16 @@ export class Nes {
         }
     }
     /**
+     * Saves the console into rollback slot `slot` (slots grow as needed).
+     * @param {number} slot
+     */
+    saveSlot(slot) {
+        const ret = wasm.nes_saveSlot(this.__wbg_ptr, slot);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * Serializes the console into an internal buffer; returns its length.
      * Read it from [`Nes::state_ptr`]. Uncompressed, so it is fast enough for rollback.
      * @returns {number}
@@ -94,6 +114,23 @@ export class Nes {
             throw takeFromExternrefTable0(ret[1]);
         }
         return ret[0] >>> 0;
+    }
+    /**
+     * @param {number} slot
+     * @returns {number}
+     */
+    slotLen(slot) {
+        const ret = wasm.nes_slotLen(this.__wbg_ptr, slot);
+        return ret >>> 0;
+    }
+    /**
+     * Address and length of rollback slot `slot`, to copy out (e.g. as a spectator snapshot).
+     * @param {number} slot
+     * @returns {number}
+     */
+    slotPtr(slot) {
+        const ret = wasm.nes_slotPtr(this.__wbg_ptr, slot);
+        return ret >>> 0;
     }
     /**
      * @returns {number}
