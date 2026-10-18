@@ -180,16 +180,19 @@ function tickPlayer(session: RollbackSession, due: number): boolean {
  * without a new frame: on a lossy channel the last packet may have been lost.
  */
 function sendPeerPacket(session: RollbackSession) {
-  if (!peerPort) return;
   const other = session.activeSeats.find((seat) => seat !== session.localSeat);
   if (other === undefined) return;
   const packet = peerHistory.packet(session.localSeat, session.localAdvantage(), session.receivedThrough(other));
-  if (packet) peerPort.postMessage(packet);
+  if (packet) { peerPort?.postMessage(packet); link?.sendRelayPacket(packet); }
 }
 
 /** A packet from the other player over the direct link: same inputs as the server relays, sooner. */
 function onPeerPacket(packet: PeerPacket) {
   const session = link?.session;
+  if (session instanceof LockstepSession && packet.t === "in") {
+    for (const [f, m] of unpackInputs(packet)) session.receive(packet.s, f, m);
+    return;
+  }
   if (!(session instanceof RollbackSession) || packet.t !== "in" || packet.s === session.localSeat) return;
   for (const [f, m] of unpackInputs(packet)) session.receive(packet.s, f, m);
   if (Number.isInteger(packet.a)) session.receiveAdvantage(packet.a);
@@ -378,6 +381,8 @@ function joinRoom(url: string, name: string, romHash: string, simulated: Simulat
     onError: (code) => post({ type: "netError", code }),
     onPing: (rttMs) => post({ type: "netPing", rttMs }),
     onSignal: (from, data) => post({ type: "netSignal", from, data }),
+    onRelayPacket: onPeerPacket,
+    onRelayStatus: (status) => post({ type: "netRelayStatus", ...status }),
   }, simulated);
 }
 
@@ -438,6 +443,9 @@ async function handle(message: ToWorker) {
       break;
     case "netStart":
       link?.requestStart();
+      break;
+    case "netRelaySelect":
+      link?.selectRelay(message.selection);
       break;
     case "netSignal":
       link?.sendSignal(message.to, message.data);

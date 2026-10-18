@@ -1,16 +1,18 @@
 import { useState } from "react";
 import { Check, Copy, Crown, Eye, Play } from "lucide-react";
 import {
-  chooseNetplayDelay,
+  chooseRelayInputDelay,
   NES_FRAME_RATE,
   NETPLAY_SEATS,
   type NetStatus,
   type RoomEndReason,
   type RoomState,
+  type RelaySelection,
 } from "@neslink/core";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
 import { roomLink } from "@/lib/rooms";
+import { RelaySelector } from "./relay-selector";
 
 interface Props {
   status: NetStatus;
@@ -21,10 +23,11 @@ interface Props {
   onStart: () => void;
   /** Sit in a seat, or stand up to spectate (null). */
   onSeat: (seat: number | null) => void;
+  onRelaySelect: (selection: RelaySelection) => void;
 }
 
 /** Overlay on the game screen while a room waits for players or between games. */
-export function RoomLobby({ status, room, you, notice, onStart, onSeat }: Props) {
+export function RoomLobby({ status, room, you, notice, onStart, onSeat, onRelaySelect }: Props) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const me = room?.players.find((p) => p.id === you) ?? null;
@@ -34,7 +37,7 @@ export function RoomLobby({ status, room, you, notice, onStart, onSeat }: Props)
   const spectators = room?.players.filter((p) => p.seat === null) ?? [];
   const canStart = isHost && seated.length > 0;
   // The same rule the room applies when the game starts.
-  const delay = seated.length > 0 ? chooseNetplayDelay(seated) : null;
+  const delay = seated.length > 0 ? chooseRelayInputDelay(seated, room?.relay?.activeNodeId ?? null) : null;
   const measured = seated.length === 1 || seated.every((p) => p.rttMs !== null);
 
   const copy = async () => {
@@ -50,7 +53,7 @@ export function RoomLobby({ status, room, you, notice, onStart, onSeat }: Props)
 
   return (
     <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/85 p-4 text-white">
-      <div className="flex w-full max-w-sm flex-col gap-4">
+      <div className="flex max-h-full w-full max-w-lg flex-col gap-4 overflow-y-auto">
         <div className="flex items-baseline justify-between gap-2">
           <p className="text-sm text-white/60">{t.lobby.room}</p>
           <p className="font-mono text-2xl tracking-widest">{room?.info.id ?? "······"}</p>
@@ -123,6 +126,7 @@ export function RoomLobby({ status, room, you, notice, onStart, onSeat }: Props)
           </p>
         )}
 
+        {room && <RelaySelector room={room} isHost={isHost} onSelect={onRelaySelect} />}
         {notice && <p className="text-sm text-amber-300">{t.roomEnded[notice]}</p>}
 
         <div className="flex gap-2">

@@ -1,3 +1,5 @@
+import type { RelayProbe, RelaySelection, RelayState } from "./relay";
+
 /**
  * WebSocket protocol between players and the room server (a Durable Object).
  * Messages are small JSON objects; inputs are a few bytes per frame per player.
@@ -29,12 +31,13 @@ export type RoomErrorCode =
   | "notHost"
   | "noPlayers"
   | "seatLocked"
+  | "nodeLocked"
   | "seatTaken"
   | "romMismatch"
   | "lateJoinUnavailable";
 
 /** Errors from the HTTP rooms API, as `{ error: code }`. */
-export type ApiErrorCode = "roomNotFound" | "badRequest" | "missingRomHash";
+export type ApiErrorCode = "roomNotFound" | "badRequest" | "missingRomHash" | "relayUnavailable" | "connectionDenied" | "tooManyRequests";
 
 /** Why a game in progress ended for this client. */
 export type RoomEndReason = "peerLeft" | "disconnected";
@@ -56,6 +59,7 @@ export interface RoomPlayer {
   rttMs: number | null;
   /** Round trip over this player's direct link to the other player, if one is up. */
   directRttMs: number | null;
+  relayProbes?: RelayProbe[];
 }
 
 export interface RoomState {
@@ -63,9 +67,12 @@ export interface RoomState {
   hostId: string | null;
   players: RoomPlayer[];
   started: boolean;
+  relay?: RelayState;
 }
 
 export type ClientMessage =
+  | { t: "relayProbes"; probes: RelayProbe[] }
+  | { t: "relaySelect"; selection: RelaySelection }
   | { t: "hello"; name: string; romHash: string }
   /** Before a game: sit in a seat, or stand up to spectate (null). */
   | { t: "seat"; seat: number | null }
@@ -87,7 +94,7 @@ export type ClientMessage =
   | { t: "signal"; to: string; data: unknown };
 
 export type ServerMessage =
-  | { t: "welcome"; you: string; room: RoomState }
+  | { t: "welcome"; you: string; room: RoomState; connectionToken?: string }
   | { t: "room"; room: RoomState }
   | {
       t: "start";

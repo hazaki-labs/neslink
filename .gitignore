@@ -40,3 +40,5 @@ yarn-error.log*
 
 # wrangler local secrets
 .dev.vars*
+**/.test-data-*
+/apps/relay/data/
