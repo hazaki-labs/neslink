@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { verifyTicket, type ConnectionGrant } from "@neslink/relay-auth";
-import { PEER_MAX_INPUTS } from "@neslink/core/netplay";
+import { NETPLAY_MAX_MASK, PEER_MAX_INPUTS } from "@neslink/core/netplay";
 import { ReplayCache } from "./replay-cache";
 import type { RelayConfig } from "./config";
 
@@ -104,7 +104,7 @@ export function createRelay(config: RelayConfig) {
             !Number.isSafeInteger(message.f) || (message.f as number) < 0 ||
             !Array.isArray(message.m) || message.m.length === 0 || message.m.length > PEER_MAX_INPUTS ||
             message.m.length > (message.f as number) + 1 ||
-            message.m.some((mask: unknown) => !Number.isInteger(mask) || (mask as number) < 0 || (mask as number) > 255) ||
+            message.m.some((mask: unknown) => !Number.isInteger(mask) || (mask as number) < 0 || (mask as number) > NETPLAY_MAX_MASK) ||
             !Number.isSafeInteger(message.a) || !Number.isSafeInteger(message.k)) {
           ws.close(1008, "Invalid input"); return;
         }

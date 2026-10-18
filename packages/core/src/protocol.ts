@@ -90,7 +90,9 @@ export type FromWorker =
   | { type: "netSignal"; from: string; data: unknown }
   /** Our identity in the room, for the UI thread to keep (per tab) and rejoin with. */
   | { type: "netCredentials"; id: string; token: string }
-  | { type: "netReaction"; from: string; kind: ReactionKind };
+  | { type: "netReaction"; from: string; kind: ReactionKind }
+  /** The host reset the netplay game (the console's reset button). */
+  | { type: "netReset" };
 
 /** Messages from the worker to the AudioWorklet. `samples` is mono. */
 export type ToAudio = { type: "samples"; samples: Float32Array<ArrayBuffer> } | { type: "flush" };
