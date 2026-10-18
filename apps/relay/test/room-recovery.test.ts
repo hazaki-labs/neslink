@@ -171,7 +171,24 @@ it("relays and logs the host's reset input", async () => {
   await send(room, guest, { t: "seat", seat: 1 });
   await send(room, host, { t: "start" });
   await send(room, host, { t: "input", f: 5, m: 0x101 });
-  await send(room, host, { t: "input", f: 6, m: 0x200 });
+  await send(room, host, { t: "input", f: 6, m: 0x400 });
   expect(guest.messages).toContainEqual({ t: "input", s: 0, f: 5, m: 0x101 });
   expect(guest.messages.some((m) => m.t === "input" && m.f === 6)).toBe(false);
+});
+
+it("hands a player's loaded state to the others and to newcomers", async () => {
+  const h = harness(); const room = await h.load(); await room.init(info);
+  const host = await h.join(room, "Host"); const guest = await h.join(room, "Guest");
+  await send(room, guest, { t: "seat", seat: 1 });
+  await send(room, host, { t: "start" });
+  await send(room, host, { t: "snapshot", f: 600, s: "periodic" });
+  await send(room, guest, { t: "load", f: 600, s: "guest-save" });
+  await send(room, guest, { t: "input", f: 600, m: 0x200 });
+  expect(host.messages).toContainEqual({ t: "load", s: 1, f: 600, data: "guest-save" });
+  // A later periodic snapshot for the same frame must not replace the loaded state.
+  await send(room, host, { t: "snapshot", f: 600, s: "periodic-again" });
+  const late = await h.join(room, "Late");
+  expect(late.messages.find((m) => m.t === "start")).toMatchObject({
+    from: { f: 600, s: "guest-save", loaded: true }, inputs: [[1, 600, 0x200]],
+  });
 });

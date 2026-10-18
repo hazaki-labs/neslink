@@ -139,6 +139,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         else if (event.type === "netError") flash((t) => t.roomErrors[event.code], 4000);
         else if (event.type === "netReaction") showReaction(event.from);
         else if (event.type === "netReset") flash((t) => t.player.hostReset);
+        else if (event.type === "netLoaded") flash((t) => t.player.seatLoaded(event.seat + 1));
         else setNet((view) => applyNetEvent(view, event));
       },
     });
@@ -220,8 +221,12 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     const save = await getSave(rom.hash, QUICK_SLOT);
     if (!client || !save) return;
     client.loadState(save.state);
-    flash((t) => t.player.loaded);
+    // In a room everyone, us included, is told once the load runs.
+    if (!roomId) flash((t) => t.player.loaded);
   };
+
+  const playingSeat = net.playing && net.seat !== null;
+  const isHost = net.you !== null && net.room?.hostId === net.you;
 
   return (
     <div className="flex w-full max-w-4xl flex-col gap-4">
@@ -310,32 +315,32 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {/* Pause, reset and save states would desync a netplay game. */}
+        {/*
+          Pausing alone would desync a netplay game. Reset and load go to everyone
+          through the player's input: the host resets, any player loads.
+        */}
         {!roomId && (
-          <>
-        <Button variant="outline" onClick={togglePause}>
-          {paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
-          {paused ? t.player.resume : t.player.pause}
-        </Button>
-        <Button variant="outline" onClick={() => client?.reset()}>
-          <RotateCcw data-icon="inline-start" />
-          {t.player.reset}
-        </Button>
-        <Button variant="outline" onClick={saveState}>
-          <Save data-icon="inline-start" />
-          {t.player.save}
-        </Button>
-        <Button variant="outline" onClick={loadState} disabled={!hasSave}>
-          <Download data-icon="inline-start" />
-          {t.player.load}
-        </Button>
-          </>
+          <Button variant="outline" onClick={togglePause}>
+            {paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
+            {paused ? t.player.resume : t.player.pause}
+          </Button>
         )}
-        {/* In a room the host can still reset: it goes to everyone through the host's input. */}
-        {roomId && net.playing && net.seat !== null && net.you !== null && net.room?.hostId === net.you && (
+        {(!roomId || (playingSeat && isHost)) && (
           <Button variant="outline" onClick={() => client?.reset()}>
             <RotateCcw data-icon="inline-start" />
             {t.player.reset}
+          </Button>
+        )}
+        {(!roomId || net.playing) && (
+          <Button variant="outline" onClick={saveState}>
+            <Save data-icon="inline-start" />
+            {t.player.save}
+          </Button>
+        )}
+        {(!roomId || playingSeat) && (
+          <Button variant="outline" onClick={loadState} disabled={!hasSave}>
+            <Download data-icon="inline-start" />
+            {t.player.load}
           </Button>
         )}
         <Button variant="outline" className="ml-auto" onClick={() => screenRef.current?.requestFullscreen()}>

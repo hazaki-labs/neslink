@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MAX_ROLLBACK, RollbackSession, type RollbackHost } from "./rollback";
 import { InputHistory, PEER_MAX_INPUTS, unpackInputs, type PeerPacket } from "./peer";
-import { NETPLAY_RESET } from "./protocol";
+import { NETPLAY_LOAD, NETPLAY_RESET } from "./protocol";
 
 describe("InputHistory", () => {
   it("resends everything the other side has not acknowledged", () => {
@@ -95,9 +95,9 @@ describe("redundant packets over a lossy channel", () => {
   });
 });
 
-describe("unpackInputs reset", () => {
-  it("keeps the reset bit and drops masks past it", () => {
-    const packet: PeerPacket = { t: "in", s: 0, f: 2, m: [1, NETPLAY_RESET | 1, 0x200], a: 0, k: 0 };
-    expect(unpackInputs(packet)).toEqual([[0, 1], [1, NETPLAY_RESET | 1]]);
+describe("unpackInputs events", () => {
+  it("keeps the reset and load bits and drops masks past them", () => {
+    const packet: PeerPacket = { t: "in", s: 0, f: 3, m: [1, NETPLAY_RESET | 1, NETPLAY_LOAD, 0x400], a: 0, k: 0 };
+    expect(unpackInputs(packet)).toEqual([[0, 1], [1, NETPLAY_RESET | 1], [2, NETPLAY_LOAD]]);
   });
 });

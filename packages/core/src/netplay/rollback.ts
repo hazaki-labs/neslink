@@ -1,4 +1,4 @@
-import { NETPLAY_RESET, NETPLAY_SEATS } from "./protocol";
+import { NETPLAY_EVENTS, NETPLAY_SEATS } from "./protocol";
 
 /** What a rollback session drives: the emulator, through save slots it owns. */
 export interface RollbackHost {
@@ -6,8 +6,8 @@ export interface RollbackHost {
   save(slot: number): void;
   /** Restore the state saved in `slot`. */
   load(slot: number): void;
-  /** Run one frame. `replay` marks a re-simulation of a frame already shown: skip its audio. */
-  run(inputs: readonly number[], replay: boolean): void;
+  /** Run `frame`. `replay` marks a re-simulation of a frame already shown: skip its audio. */
+  run(inputs: readonly number[], replay: boolean, frame: number): void;
   /** Hash of the state right after a run, for desync checks across machines. */
   hash(): number;
 }
@@ -271,7 +271,7 @@ export class RollbackSession {
     this.host.save(frame % ROLLBACK_SLOTS);
     const inputs = this.inputsFor(frame);
     this.used.set(frame, inputs);
-    this.host.run(inputs, replay);
+    this.host.run(inputs, replay, frame);
     this.hashes[frame % ROLLBACK_SLOTS] = this.host.hash();
   }
 
@@ -279,8 +279,8 @@ export class RollbackSession {
     const inputs = new Array<number>(NETPLAY_SEATS).fill(0);
     for (const [seat, confirmed] of this.confirmed) {
       // Unknown remote input: assume they still hold what they last held,
-      // but never press reset again: that happens once, on the frame it was sent for.
-      inputs[seat] = confirmed.get(frame) ?? (confirmed.get(Math.min(frame, this.contiguous.get(seat)!)) ?? 0) & ~NETPLAY_RESET;
+      // but never repeat a reset or a load: those happen once, on the frame they were sent for.
+      inputs[seat] = confirmed.get(frame) ?? (confirmed.get(Math.min(frame, this.contiguous.get(seat)!)) ?? 0) & ~NETPLAY_EVENTS;
     }
     return inputs;
   }

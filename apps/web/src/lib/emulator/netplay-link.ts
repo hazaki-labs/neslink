@@ -29,6 +29,8 @@ export interface GameStart {
   startFrame: number;
   /** Base64 save state for a late spectator or a rejoining player, else null. */
   snapshot: string | null;
+  /** The snapshot is a state a player loaded at startFrame: skip loads logged for that frame. */
+  snapshotLoaded: boolean;
   /** Inputs the room logged since that frame, all seats (ours too, when rejoining). */
   inputs: [seat: number, frame: number, mask: number][];
 }
@@ -62,6 +64,8 @@ export interface NetplayEvents {
   onCredentials(credentials: RoomCredentials): void;
   /** Someone in the room reacted. */
   onReaction(from: string, kind: ReactionKind): void;
+  /** Seat `seat` loads base64 save state `data` before `frame`; its input for that frame follows. */
+  onLoad(seat: number, frame: number, data: string): void;
 }
 
 /** Extra latency to simulate on this link (dev tool, from `?lag=` / `?swing=`). */
@@ -200,6 +204,11 @@ export class NetplayLink {
     this.send({ t: "snapshot", f: frame, s: state });
   }
 
+  /** Load base64 `state` before `frame` for everyone; send ahead of that frame's input. */
+  sendLoad(frame: number, state: string): void {
+    this.send({ t: "load", f: frame, s: state });
+  }
+
   sendInput(frame: number, mask: number, advantage?: number): void {
     this.send({ t: "input", f: frame, m: mask, a: advantage });
   }
@@ -284,6 +293,7 @@ export class NetplayLink {
           delay: message.delay,
           startFrame: message.from?.f ?? 0,
           snapshot: message.from?.s ?? null,
+          snapshotLoaded: message.from?.loaded === true,
           inputs: message.inputs ?? [],
         });
         this.stopRelay();
@@ -299,6 +309,9 @@ export class NetplayLink {
         if (message.a !== undefined && this.session && !this.session.spectating) {
           (this.session as RollbackSession).receiveAdvantage(message.a);
         }
+        break;
+      case "load":
+        this.events.onLoad(message.s, message.f, message.data);
         break;
       case "desync":
         this.events.onDesync(message.f);
