@@ -15,6 +15,9 @@ export interface EmulatorError {
   message: string;
 }
 /** Netplay events from the worker (room updates, start/end, desync, errors). */
+/** How long a closing player's worker gets to send the room its "leave" close. */
+const LEAVE_GRACE_MS = 500;
+
 export type NetEvent = Extract<FromWorker, { type: `net${string}` }>;
 
 export interface EmulatorEvents {
@@ -168,11 +171,20 @@ export class EmulatorClient {
   }
 
   destroy(): void {
+    // Closing the player in a room is leaving it on purpose: no seat is kept,
+    // and coming back is a fresh join. A refresh never gets here.
+    const inRoom = this.roomUrl !== null;
+    if (inRoom) {
+      clearCredentials(this.roomUrl!);
+      this.send({ type: "netLeave" });
+    }
     this.destroyed = true;
     this.peer?.dispose();
     this.peer = null;
     document.removeEventListener("visibilitychange", this.onVisibility);
-    this.worker.terminate();
+    // Give the worker a moment to send the socket's "leave" close first.
+    if (inRoom) setTimeout(() => this.worker.terminate(), LEAVE_GRACE_MS);
+    else this.worker.terminate();
     void this.audio.close();
     this.pending.clear();
   }
@@ -202,6 +214,8 @@ export class EmulatorClient {
   }
 
   private onMessage(message: FromWorker) {
+    // A closing worker may still talk while it leaves the room; nobody is listening.
+    if (this.destroyed) return;
     switch (message.type) {
       case "ready":
         this.events.onReady?.();
@@ -256,6 +270,14 @@ function loadCredentials(url: string): { id: string; token: string } | null {
     return saved && typeof saved.id === "string" && typeof saved.token === "string" ? { id: saved.id, token: saved.token } : null;
   } catch {
     return null;
+  }
+}
+
+function clearCredentials(url: string) {
+  try {
+    sessionStorage.removeItem(credentialsKey(url));
+  } catch {
+    // Nothing was kept.
   }
 }
 
