@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LockstepSession } from "./lockstep";
+import { NETPLAY_RESET } from "./protocol";
 import { MAX_ROLLBACK, ROLLBACK_SLOTS, RollbackSession, type RollbackHost } from "./rollback";
 
 /** A deterministic stand-in for the emulator: its state folds in every frame's inputs. */
@@ -243,5 +244,90 @@ describe("RollbackSession rejoin", () => {
     for (const [f, h] of oldB.finals) if (f < 600) expect(h).toBe(hashes[f]);
     // Both sides finished the same game.
     expect(Math.abs(a.session.frame - b.session.frame)).toBeLessThanOrEqual(MAX_ROLLBACK + 4);
+  });
+});
+
+describe("RollbackSession reset", () => {
+  it("never predicts a remote reset onto later frames", () => {
+    const game = new FakeGame();
+    const ran: number[][] = [];
+    const session = new RollbackSession([0, 1], 1, 2, {
+      ...game,
+      save: (slot) => game.save(slot),
+      load: (slot) => game.load(slot),
+      run: (inputs, replay) => { ran.push([...inputs]); game.run(inputs, replay); },
+      hash: () => game.hash(),
+    });
+    // The host (seat 0) resets on frame 2 while holding A; we know nothing past it.
+    for (let f = 0; f <= 2; f++) session.receive(0, f, f === 2 ? NETPLAY_RESET | 1 : 1);
+    for (let n = 0; n < 6 && session.canAdvance(); n++) session.advance(0);
+    const seat0 = ran.map((inputs) => inputs[0]);
+    expect(seat0[2]).toBe(NETPLAY_RESET | 1);
+    // Later frames still predict A held, without pressing reset again.
+    expect(seat0.slice(3)).toEqual(seat0.slice(3).map(() => 1));
+    expect(seat0.length).toBeGreaterThan(3);
+  });
+});
+
+describe("RollbackSession takeover", () => {
+  it("takes over a seat stood in for, catching up far past the rollback window", () => {
+    const delay = 2;
+    let log: [number, number, number][] = [];
+    let snapshot: { f: number; state: number } | null = null;
+    const truth = new Map<number, [number, number]>();
+    const record = (seat: number, frame: number, mask: number) => {
+      const entry = truth.get(frame) ?? [0, 0];
+      entry[seat] = mask;
+      truth.set(frame, entry);
+      log.push([seat, frame, mask]);
+    };
+    const aGame = new FakeGame();
+    const a = new RollbackSession([0, 1], 0, delay, aGame);
+    a.onFinal = (frame) => {
+      if ((frame + 1) % 100 !== 0) return;
+      const slot = a.slotBefore(frame + 1);
+      snapshot = { f: frame + 1, state: slot === null ? aGame.state : aGame.slots.get(slot)! };
+      log = log.filter(([, f]) => f >= frame + 1);
+    };
+    // A plays alone and fills 2P with neutral input, as the room's first seat does.
+    let standIn: number | null = delay;
+    let b: RollbackSession | null = null;
+    const bFinals = new Map<number, number>();
+    const toA: [number, number][] = [];
+    const toB: [number, number][] = [];
+    for (let tick = 0; tick < 600; tick++) {
+      if (tick === 450) {
+        // B sits down: A stops standing in, and B starts from the snapshot and log.
+        standIn = null;
+        const game = new FakeGame();
+        game.state = snapshot!.state;
+        b = new RollbackSession([0, 1], 1, delay, game, snapshot!.f);
+        b.onFinal = (frame, hash) => bFinals.set(frame, hash);
+        for (const [s, f, m] of log) b.seed(s, f, m);
+        for (const [f, m] of b.resume()) { record(1, f, m); toA.push([f, m]); }
+        expect(b.catchUp()).toBeGreaterThan(ROLLBACK_SLOTS * 4);
+      }
+      for (const [f, m] of toA.splice(0)) a.receive(1, f, m);
+      for (const [f, m] of toB.splice(0)) b?.receive(0, f, m);
+      a.resolve();
+      if (a.canAdvance()) {
+        const mask = (a.frame * 3) % 7;
+        const frame = a.advance(mask);
+        if (frame !== null) { record(0, frame, mask); toB.push([frame, mask]); }
+        for (; standIn !== null && standIn <= a.receivedThrough(0); standIn++) { a.receive(1, standIn, 0); record(1, standIn, 0); }
+      }
+      if (b) {
+        b.resolve();
+        if (b.canAdvance()) {
+          const mask = (b.frame * 5) % 7;
+          const frame = b.advance(mask);
+          if (frame !== null) { record(1, frame, mask); toA.push([frame, mask]); }
+        }
+      }
+    }
+    const expected = new FakeGame();
+    const hashes = Array.from({ length: 590 }, (_, f) => { expected.run(truth.get(f) ?? [0, 0], false); return expected.hash(); });
+    expect(bFinals.size).toBeGreaterThan(100);
+    for (const [f, h] of bFinals) if (f < 590) expect(h).toBe(hashes[f]);
   });
 });

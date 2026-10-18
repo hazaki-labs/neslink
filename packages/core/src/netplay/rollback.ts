@@ -1,4 +1,4 @@
-import { NETPLAY_SEATS } from "./protocol";
+import { NETPLAY_EVENTS, NETPLAY_SEATS } from "./protocol";
 
 /** What a rollback session drives: the emulator, through save slots it owns. */
 export interface RollbackHost {
@@ -6,12 +6,14 @@ export interface RollbackHost {
   save(slot: number): void;
   /** Restore the state saved in `slot`. */
   load(slot: number): void;
-  /** Run one frame. `replay` marks a re-simulation of a frame already shown: skip its audio. */
-  run(inputs: readonly number[], replay: boolean): void;
+  /** Run `frame`. `replay` marks a re-simulation of a frame already shown: skip its audio. */
+  run(inputs: readonly number[], replay: boolean, frame: number): void;
   /** Hash of the state right after a run, for desync checks across machines. */
   hash(): number;
 }
 
+/** Remote inputs `recentInput` remembers: a few seconds for two players. */
+const RECENT_INPUTS = 512;
 /** Most frames the session will run past the last fully confirmed one. */
 export const MAX_ROLLBACK = 8;
 /** Slots needed: one per speculative frame, plus the confirmed one before them. */
@@ -61,6 +63,8 @@ export class RollbackSession {
   private rollbackFrom: number | null = null;
   /** Where local play picks up after a resume (see `resume`). */
   private resumeAt = 0;
+  /** Remote inputs received lately, kept past finalizing (see `recentInput`). */
+  private readonly recent = new Map<string, number>();
   private remoteAdvantage = 0;
   private sinceYield = 0;
   private readonly stats: RollbackStats = { rollbacks: 0, replayedFrames: 0 };
@@ -112,6 +116,8 @@ export class RollbackSession {
     const inputs = this.confirmed.get(seat);
     if (!inputs || inputs.has(frame) || frame <= this.contiguous.get(seat)!) return;
     inputs.set(frame, mask);
+    this.recent.set(`${seat}:${frame}`, mask);
+    if (this.recent.size > RECENT_INPUTS) this.recent.delete(this.recent.keys().next().value!);
     this.newest.set(seat, Math.max(this.newest.get(seat)!, frame));
     let contiguous = this.contiguous.get(seat)!;
     while (inputs.has(contiguous + 1)) contiguous++;
@@ -170,9 +176,20 @@ export class RollbackSession {
       this.runFrame(this.next, true);
       this.next++;
       ran++;
+      // As we go: hashes and save slots only hold the last few frames.
+      this.finalize();
     }
     this.finalize();
     return ran;
+  }
+
+  /**
+   * A remote seat's input for `frame`, if it arrived lately (the last few
+   * seconds), even if that frame is final: for handing the room inputs it
+   * missed when that player dropped.
+   */
+  recentInput(seat: number, frame: number): number | undefined {
+    return this.recent.get(`${seat}:${frame}`);
   }
 
   /** The other player's view of how far ahead of us they are, for time sync. */
@@ -271,15 +288,16 @@ export class RollbackSession {
     this.host.save(frame % ROLLBACK_SLOTS);
     const inputs = this.inputsFor(frame);
     this.used.set(frame, inputs);
-    this.host.run(inputs, replay);
+    this.host.run(inputs, replay, frame);
     this.hashes[frame % ROLLBACK_SLOTS] = this.host.hash();
   }
 
   private inputsFor(frame: number): number[] {
     const inputs = new Array<number>(NETPLAY_SEATS).fill(0);
     for (const [seat, confirmed] of this.confirmed) {
-      // Unknown remote input: assume they still hold what they last held.
-      inputs[seat] = confirmed.get(frame) ?? confirmed.get(Math.min(frame, this.contiguous.get(seat)!)) ?? 0;
+      // Unknown remote input: assume they still hold what they last held,
+      // but never repeat a reset or a load: those happen once, on the frame they were sent for.
+      inputs[seat] = confirmed.get(frame) ?? (confirmed.get(Math.min(frame, this.contiguous.get(seat)!)) ?? 0) & ~NETPLAY_EVENTS;
     }
     return inputs;
   }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Download, Maximize, Pause, Play, RotateCcw, Save } from "lucide-react";
+import { ArrowLeft, Download, Gamepad2, Maximize, Pause, Play, RotateCcw, Save } from "lucide-react";
 import {
   NES_FRAME_RATE,
   NES_HEIGHT,
@@ -138,6 +138,8 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         if (event.type === "netDesync") flash((t) => t.player.desync(event.frame), 5000);
         else if (event.type === "netError") flash((t) => t.roomErrors[event.code], 4000);
         else if (event.type === "netReaction") showReaction(event.from);
+        else if (event.type === "netReset") flash((t) => t.player.hostReset);
+        else if (event.type === "netLoaded") flash((t) => t.player.seatLoaded(event.seat + 1));
         else setNet((view) => applyNetEvent(view, event));
       },
     });
@@ -202,6 +204,25 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     ? (net.room?.players.filter((p) => p.seat !== null && p.connected === false && p.id !== net.you) ?? [])
     : [];
 
+  // Seats of the running game nobody plays: a spectator with the room's ROM may sit down in one.
+  const vacantSeats = net.playing ? (net.room?.vacantSeats ?? []) : [];
+  const myRom = net.room?.players.find((p) => p.id === net.you)?.romHash;
+  const openSeat = net.seat === null && myRom === net.room?.info.romHash ? vacantSeats[0] : undefined;
+
+  // Tell a player when the other seat empties mid-game (the game goes on).
+  const vacantBefore = useRef<number[] | null>(null);
+  useEffect(() => {
+    if (!net.playing || net.seat === null) {
+      vacantBefore.current = null;
+      return;
+    }
+    const before = vacantBefore.current;
+    vacantBefore.current = vacantSeats;
+    const opened = before && vacantSeats.find((seat) => !before.includes(seat));
+    if (opened !== undefined && opened !== null) flash((t) => t.player.seatOpened(opened + 1), 4000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [net.playing, net.seat, vacantSeats.join()]);
+
   const togglePause = () => {
     client?.setPaused(!paused);
     setPaused(!paused);
@@ -219,8 +240,12 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     const save = await getSave(rom.hash, QUICK_SLOT);
     if (!client || !save) return;
     client.loadState(save.state);
-    flash((t) => t.player.loaded);
+    // In a room everyone, us included, is told once the load runs.
+    if (!roomId) flash((t) => t.player.loaded);
   };
+
+  const playingSeat = net.playing && net.seat !== null;
+  const isHost = net.you !== null && net.room?.hostId === net.you;
 
   return (
     <div className="flex w-full max-w-4xl flex-col gap-4">
@@ -309,26 +334,39 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {/* Pause, reset and save states would desync a netplay game. */}
+        {/*
+          Pausing alone would desync a netplay game. Reset and load go to everyone
+          through the player's input: the host resets, any player loads.
+        */}
         {!roomId && (
-          <>
-        <Button variant="outline" onClick={togglePause}>
-          {paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
-          {paused ? t.player.resume : t.player.pause}
-        </Button>
-        <Button variant="outline" onClick={() => client?.reset()}>
-          <RotateCcw data-icon="inline-start" />
-          {t.player.reset}
-        </Button>
-        <Button variant="outline" onClick={saveState}>
-          <Save data-icon="inline-start" />
-          {t.player.save}
-        </Button>
-        <Button variant="outline" onClick={loadState} disabled={!hasSave}>
-          <Download data-icon="inline-start" />
-          {t.player.load}
-        </Button>
-          </>
+          <Button variant="outline" onClick={togglePause}>
+            {paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
+            {paused ? t.player.resume : t.player.pause}
+          </Button>
+        )}
+        {roomId && openSeat !== undefined && (
+          <Button onClick={() => client?.takeSeat(openSeat)}>
+            <Gamepad2 data-icon="inline-start" />
+            {t.player.takeSeat(openSeat + 1)}
+          </Button>
+        )}
+        {(!roomId || (playingSeat && isHost)) && (
+          <Button variant="outline" onClick={() => client?.reset()}>
+            <RotateCcw data-icon="inline-start" />
+            {t.player.reset}
+          </Button>
+        )}
+        {(!roomId || net.playing) && (
+          <Button variant="outline" onClick={saveState}>
+            <Save data-icon="inline-start" />
+            {t.player.save}
+          </Button>
+        )}
+        {(!roomId || playingSeat) && (
+          <Button variant="outline" onClick={loadState} disabled={!hasSave}>
+            <Download data-icon="inline-start" />
+            {t.player.load}
+          </Button>
         )}
         <Button variant="outline" className="ml-auto" onClick={() => screenRef.current?.requestFullscreen()}>
           <Maximize data-icon="inline-start" />
