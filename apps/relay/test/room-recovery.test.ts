@@ -164,3 +164,14 @@ it("relays thumbs-ups and renames", async () => {
   await send(room, host, { t: "rename", name: "  New name  " });
   expect(guest.messages.filter((m) => m.t === "room").at(-1).room.players.find((p: any) => p.id === hostId).name).toBe("New name");
 });
+
+it("relays and logs the host's reset input", async () => {
+  const h = harness(); const room = await h.load(); await room.init(info);
+  const host = await h.join(room, "Host"); const guest = await h.join(room, "Guest");
+  await send(room, guest, { t: "seat", seat: 1 });
+  await send(room, host, { t: "start" });
+  await send(room, host, { t: "input", f: 5, m: 0x101 });
+  await send(room, host, { t: "input", f: 6, m: 0x200 });
+  expect(guest.messages).toContainEqual({ t: "input", s: 0, f: 5, m: 0x101 });
+  expect(guest.messages.some((m) => m.t === "input" && m.f === 6)).toBe(false);
+});

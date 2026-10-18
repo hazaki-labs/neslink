@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   chooseNetplayDelay,
   NETPLAY_PING,
+  NETPLAY_MAX_MASK,
   NETPLAY_PONG,
   NETPLAY_RECONNECT_GRACE_MS,
   NETPLAY_SEATS,
@@ -586,5 +587,5 @@ function isFrame(value: unknown): value is number {
 }
 
 function isMask(value: unknown): value is number {
-  return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 0xff;
+  return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= NETPLAY_MAX_MASK;
 }

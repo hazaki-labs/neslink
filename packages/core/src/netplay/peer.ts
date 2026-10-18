@@ -1,3 +1,5 @@
+import { NETPLAY_MAX_MASK } from "./protocol";
+
 /**
  * Direct player-to-player packets over a WebRTC data channel. The channel is
  * unordered and never retransmits (a late input is worse than a lost one, and
@@ -68,7 +70,7 @@ export function unpackInputs(packet: PeerPacket): [frame: number, mask: number][
   const first = packet.f - packet.m.length + 1;
   const out: [number, number][] = [];
   packet.m.forEach((mask, i) => {
-    if (Number.isInteger(mask) && mask >= 0 && mask <= 0xff && first + i >= 0) out.push([first + i, mask]);
+    if (Number.isInteger(mask) && mask >= 0 && mask <= NETPLAY_MAX_MASK && first + i >= 0) out.push([first + i, mask]);
   });
   return out;
 }

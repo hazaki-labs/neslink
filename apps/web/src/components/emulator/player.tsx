@@ -138,6 +138,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         if (event.type === "netDesync") flash((t) => t.player.desync(event.frame), 5000);
         else if (event.type === "netError") flash((t) => t.roomErrors[event.code], 4000);
         else if (event.type === "netReaction") showReaction(event.from);
+        else if (event.type === "netReset") flash((t) => t.player.hostReset);
         else setNet((view) => applyNetEvent(view, event));
       },
     });
@@ -329,6 +330,13 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
           {t.player.load}
         </Button>
           </>
+        )}
+        {/* In a room the host can still reset: it goes to everyone through the host's input. */}
+        {roomId && net.playing && net.seat !== null && net.you !== null && net.room?.hostId === net.you && (
+          <Button variant="outline" onClick={() => client?.reset()}>
+            <RotateCcw data-icon="inline-start" />
+            {t.player.reset}
+          </Button>
         )}
         <Button variant="outline" className="ml-auto" onClick={() => screenRef.current?.requestFullscreen()}>
           <Maximize data-icon="inline-start" />

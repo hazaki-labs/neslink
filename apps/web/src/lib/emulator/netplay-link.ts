@@ -170,6 +170,11 @@ export class NetplayLink {
     this.send({ t: "react", kind });
   }
 
+  /** Whether we host the room: only the host may reset a running game. */
+  get isHost(): boolean {
+    return this.you !== null && this.room?.hostId === this.you;
+  }
+
   requestStart(): void {
     this.send({ t: "start" });
   }

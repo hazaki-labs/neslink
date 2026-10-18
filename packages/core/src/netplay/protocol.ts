@@ -25,6 +25,16 @@ export const NETPLAY_SNAPSHOT_INTERVAL = 600;
 export const NETPLAY_PING = "ping";
 export const NETPLAY_PONG = "pong";
 
+/**
+ * Set on the host's input for a frame (above the eight controller buttons):
+ * press the console's reset button before running that frame. Going through
+ * the input stream makes every player reset on the same frame, rollback
+ * replays it like any input, and late spectators see it in the room's log.
+ */
+export const NETPLAY_RESET = 0x100;
+/** Largest input mask on the wire: the eight buttons plus NETPLAY_RESET. */
+export const NETPLAY_MAX_MASK = 0x1ff;
+
 /** Why the room refused a request. The UI turns these into text in the viewer's language. */
 export type RoomErrorCode =
   | "malformed"
@@ -90,7 +100,7 @@ export type ClientMessage =
   | { t: "seat"; seat: number | null }
   /** Host only: begin the game with whoever is seated (at least one). */
   | { t: "start" }
-  /** Local input `m` for frame `f`. */
+  /** Local input `m` for frame `f` (buttons, plus NETPLAY_RESET from the host). */
   /** `a`: the sender's frame advantage, for rollback time sync. */
   | { t: "input"; f: number; m: number; a?: number }
   /** State hash `h` after running frame `f`. */

@@ -1,4 +1,4 @@
-import { NETPLAY_SEATS } from "./protocol";
+import { NETPLAY_RESET, NETPLAY_SEATS } from "./protocol";
 
 /** What a rollback session drives: the emulator, through save slots it owns. */
 export interface RollbackHost {
@@ -278,8 +278,9 @@ export class RollbackSession {
   private inputsFor(frame: number): number[] {
     const inputs = new Array<number>(NETPLAY_SEATS).fill(0);
     for (const [seat, confirmed] of this.confirmed) {
-      // Unknown remote input: assume they still hold what they last held.
-      inputs[seat] = confirmed.get(frame) ?? confirmed.get(Math.min(frame, this.contiguous.get(seat)!)) ?? 0;
+      // Unknown remote input: assume they still hold what they last held,
+      // but never press reset again: that happens once, on the frame it was sent for.
+      inputs[seat] = confirmed.get(frame) ?? (confirmed.get(Math.min(frame, this.contiguous.get(seat)!)) ?? 0) & ~NETPLAY_RESET;
     }
     return inputs;
   }

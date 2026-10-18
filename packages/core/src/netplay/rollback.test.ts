@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LockstepSession } from "./lockstep";
+import { NETPLAY_RESET } from "./protocol";
 import { MAX_ROLLBACK, ROLLBACK_SLOTS, RollbackSession, type RollbackHost } from "./rollback";
 
 /** A deterministic stand-in for the emulator: its state folds in every frame's inputs. */
@@ -243,5 +244,27 @@ describe("RollbackSession rejoin", () => {
     for (const [f, h] of oldB.finals) if (f < 600) expect(h).toBe(hashes[f]);
     // Both sides finished the same game.
     expect(Math.abs(a.session.frame - b.session.frame)).toBeLessThanOrEqual(MAX_ROLLBACK + 4);
+  });
+});
+
+describe("RollbackSession reset", () => {
+  it("never predicts a remote reset onto later frames", () => {
+    const game = new FakeGame();
+    const ran: number[][] = [];
+    const session = new RollbackSession([0, 1], 1, 2, {
+      ...game,
+      save: (slot) => game.save(slot),
+      load: (slot) => game.load(slot),
+      run: (inputs, replay) => { ran.push([...inputs]); game.run(inputs, replay); },
+      hash: () => game.hash(),
+    });
+    // The host (seat 0) resets on frame 2 while holding A; we know nothing past it.
+    for (let f = 0; f <= 2; f++) session.receive(0, f, f === 2 ? NETPLAY_RESET | 1 : 1);
+    for (let n = 0; n < 6 && session.canAdvance(); n++) session.advance(0);
+    const seat0 = ran.map((inputs) => inputs[0]);
+    expect(seat0[2]).toBe(NETPLAY_RESET | 1);
+    // Later frames still predict A held, without pressing reset again.
+    expect(seat0.slice(3)).toEqual(seat0.slice(3).map(() => 1));
+    expect(seat0.length).toBeGreaterThan(3);
   });
 });

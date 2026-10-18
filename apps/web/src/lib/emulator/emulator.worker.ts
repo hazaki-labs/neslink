@@ -5,6 +5,7 @@ import {
   NES_HEIGHT,
   NES_WIDTH,
   NETPLAY_HASH_INTERVAL,
+  NETPLAY_RESET,
   NETPLAY_SNAPSHOT_INTERVAL,
   MAX_ROLLBACK,
   type FromWorker,
@@ -57,6 +58,11 @@ let link: NetplayLink | null = null;
 let peerPort: MessagePort | null = null;
 /** Our inputs not yet acknowledged over the direct link. */
 const peerHistory = new InputHistory();
+/** The host asked to reset the netplay game: our next input carries NETPLAY_RESET. */
+let resetPending = false;
+/** When the last netplay reset ran, so a rollback re-running it does not announce it again. */
+let lastResetAt = -Infinity;
+const RESET_NOTICE_MS = 2000;
 /** Netplay frames the clock says are due but that could not run yet. */
 let owedFrames = 0;
 let netWaits = 0;
@@ -115,6 +121,13 @@ function running() {
  */
 function step(frameInputs: readonly number[], live = true) {
   const t0 = performance.now();
+  if (frameInputs.some((mask) => mask & NETPLAY_RESET)) {
+    // A netplay reset, on the same frame for everyone (see NETPLAY_RESET).
+    core!.reset();
+    if (t0 - lastResetAt > RESET_NOTICE_MS) post({ type: "netReset" });
+    lastResetAt = t0;
+    frameInputs = frameInputs.map((mask) => mask & ~NETPLAY_RESET);
+  }
   core!.runFrame(frameInputs);
   frameCostMs += (performance.now() - t0 - frameCostMs) * 0.05;
   if (!live) {
@@ -175,12 +188,13 @@ function tickPlayer(session: RollbackSession, due: number): boolean {
   const replayed = session.resolve();
   let ran = 0;
   while (owedFrames > 0 && session.canAdvance()) {
-    const mask = localMask(session.frame);
+    const mask = localMask(session.frame) | (resetPending ? NETPLAY_RESET : 0);
     const localFrame = session.advance(mask);
     // Null right after a rejoin, while frames whose input we already sent come round.
     if (localFrame !== null) {
       link!.sendInput(localFrame, mask, session.localAdvantage());
       peerHistory.push(localFrame, mask);
+      resetPending = false;
     }
     owedFrames--;
     ran++;
@@ -198,7 +212,12 @@ function sendPeerPacket(session: RollbackSession) {
   const other = session.activeSeats.find((seat) => seat !== session.localSeat);
   if (other === undefined) return;
   const packet = peerHistory.packet(session.localSeat, session.localAdvantage(), session.receivedThrough(other));
-  if (packet) { peerPort?.postMessage(packet); link?.sendRelayPacket(packet); }
+  if (!packet) return;
+  peerPort?.postMessage(packet);
+  // Relay nodes deployed before netplay reset drop the connection on a mask
+  // above 0xff. Leave the reset frame to the other paths; it is acked in a moment.
+  if (packet.t === "in" && packet.m.some((mask) => mask & NETPLAY_RESET)) return;
+  link?.sendRelayPacket(packet);
 }
 
 /** A packet from the other player over the direct link: same inputs as the server relays, sooner. */
@@ -349,6 +368,7 @@ function startGame(game: GameStart): NetSession | null {
   frame = game.startFrame;
   owedFrames = 0;
   peerHistory.clear();
+  resetPending = false;
 
   let session: NetSession;
   if (game.localSeat === null) {
@@ -452,7 +472,11 @@ async function handle(message: ToWorker) {
       else start();
       break;
     case "reset":
-      if (inNetGame()) break;
+      if (inNetGame()) {
+        // Only the host, playing in the game, resets it: through its next input, for everyone.
+        if (link!.session instanceof RollbackSession && link!.isHost) resetPending = true;
+        break;
+      }
       core?.reset();
       frame = 0;
       break;
