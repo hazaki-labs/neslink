@@ -1,4 +1,4 @@
-import type { ApiErrorCode, RoomInfo } from "@neslink/core";
+import { hashRom, parseRomHeader, type ApiErrorCode, type RoomInfo } from "@neslink/core";
 import { messages } from "@/i18n";
 
 /** A failed rooms API call; `code` is worded by the UI in the viewer's language. */
@@ -24,6 +24,43 @@ export async function getRoom(id: string): Promise<RoomInfo | null> {
   if (res.status === 404) return null;
   if (!res.ok) throw new RoomApiError(await errorCode(res, "loadFailed"));
   return res.json();
+}
+
+/**
+ * The room's ROM, from a player in it who has it, for joining without one.
+ * `onProgress` gets the bytes received so far. Checked against the room's
+ * hash; a ROM that fails the check, or a transfer cut short, is romUnavailable.
+ */
+export async function fetchRoomRom(info: RoomInfo, onProgress: (bytes: number) => void): Promise<Uint8Array<ArrayBuffer>> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(info.id)}/rom`, { cache: "no-store" });
+  if (!res.ok || !res.body) throw new RoomApiError(await errorCode(res, "romUnavailable"));
+  const parts: Uint8Array[] = [];
+  let received = 0;
+  const reader = res.body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      received += value.length;
+      onProgress(received);
+    }
+  } catch {
+    throw new RoomApiError("romUnavailable");
+  }
+  const data = new Uint8Array(received);
+  let offset = 0;
+  for (const part of parts) {
+    data.set(part, offset);
+    offset += part.length;
+  }
+  try {
+    parseRomHeader(data);
+  } catch {
+    throw new RoomApiError("romUnavailable");
+  }
+  if ((await hashRom(data)) !== info.romHash) throw new RoomApiError("romUnavailable");
+  return data;
 }
 
 export function roomSocketUrl(id: string): string {
@@ -97,7 +134,9 @@ export function playerName(): string {
   }
 }
 
-const API_ERROR_CODES: readonly string[] = ["roomNotFound", "badRequest", "missingRomHash", "relayUnavailable", "connectionDenied", "tooManyRequests"] satisfies ApiErrorCode[];
+const API_ERROR_CODES: readonly string[] = [
+  "roomNotFound", "badRequest", "missingRomHash", "relayUnavailable", "connectionDenied", "tooManyRequests", "romUnavailable",
+] satisfies ApiErrorCode[];
 
 async function errorCode(res: Response, fallback: RoomApiError["code"]): Promise<RoomApiError["code"]> {
   try {

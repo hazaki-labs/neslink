@@ -256,3 +256,29 @@ it("passes the host's cheats on, and gives newcomers the ones in force at the sn
   await send(room, host, { t: "cheats", f: 800, codes: Array.from({ length: 65 }, () => "SXIOPO") });
   expect(guest.messages.some((m) => m.t === "cheats" && m.f === 800)).toBe(false);
 });
+
+it("streams the room's ROM from a player who has it, without keeping it", async () => {
+  const h = harness(); const room = await h.load(); await room.init(info);
+  const host = await h.join(room, "Host");
+  const other = await h.join(room, "Other");
+  const res = await room.fetch(new Request(`https://neslink.test/api/rooms/${info.id}/rom`));
+  expect(res.status).toBe(200);
+  const request = host.messages.find((m) => m.t === "romRequest");
+  expect(request).toBeTruthy();
+  const b64 = (bytes: number[]) => btoa(String.fromCharCode(...bytes));
+  // Someone else cannot slip chunks in.
+  await send(room, other, { t: "romChunk", id: request.id, i: 0, n: 2, d: b64([9, 9]) });
+  await send(room, host, { t: "romChunk", id: request.id, i: 0, n: 2, d: b64([1, 2, 3]) });
+  await send(room, host, { t: "romChunk", id: request.id, i: 1, n: 2, d: b64([4, 5]) });
+  expect([...new Uint8Array(await res.arrayBuffer())]).toEqual([1, 2, 3, 4, 5]);
+});
+
+it("says no ROM is available when nobody in the room has it, and fails a transfer whose sender leaves", async () => {
+  const h = harness(); const room = await h.load(); await room.init(info);
+  const url = `https://neslink.test/api/rooms/${info.id}/rom`;
+  expect((await room.fetch(new Request(url))).status).toBe(404);
+  const host = await h.join(room, "Host");
+  const res = await room.fetch(new Request(url));
+  await room.webSocketClose(host as any, 1000, "leave");
+  await expect(res.arrayBuffer()).rejects.toThrow();
+});

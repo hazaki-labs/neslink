@@ -71,6 +71,8 @@ export interface NetplayEvents {
   onReaction(from: string, kind: ReactionKind): void;
   /** Seat `seat` loads base64 save state `data` before `frame`; its input for that frame follows. */
   onLoad(seat: number, frame: number, data: string): void;
+  /** Someone joining without the room's ROM asks for ours: answer with `sendRom`. */
+  onRomRequest(id: string): void;
   /** The host's cheats from `frame` on; its input for that frame follows. */
   onCheats(frame: number, codes: string[]): void;
   /** Seat `seat` fell vacant: fill it in with neutral input from `frame` (or from what we hold). */
@@ -221,6 +223,12 @@ export class NetplayLink {
   }
 
   /** Our input for `frame`, or (with `seat`) the one we fill in for that vacant seat. */
+  /** Answer `romRequest` `id` with our ROM, in chunks (or say we have none). */
+  sendRom(id: string, chunks: string[] | null): void {
+    if (!chunks) return this.send({ t: "romUnavailable", id });
+    chunks.forEach((d, i) => this.send({ t: "romChunk", id, i, n: chunks.length, d }));
+  }
+
   /** Host: these cheats apply from `frame` on; send ahead of that frame's input. */
   sendCheats(frame: number, codes: string[]): void {
     this.send({ t: "cheats", f: frame, codes });
@@ -339,6 +347,9 @@ export class NetplayLink {
         break;
       case "cheats":
         this.events.onCheats(message.f, message.codes);
+        break;
+      case "romRequest":
+        this.events.onRomRequest(message.id);
         break;
       case "standIn":
         this.events.onStandIn(message.s, message.f);

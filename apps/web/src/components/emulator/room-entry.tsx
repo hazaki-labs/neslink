@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Upload } from "lucide-react";
+import { ArrowLeft, RefreshCw, Upload } from "lucide-react";
 import { hashRom, parseRomHeader, type RoomInfo } from "@neslink/core";
 import { Button } from "@/components/ui/button";
 import { useI18n, type Messages } from "@/i18n";
-import { getRoom, RoomApiError } from "@/lib/rooms";
+import { fetchRoomRom, getRoom, RoomApiError } from "@/lib/rooms";
 import { getRom, putRom, type StoredRom } from "@/lib/storage";
 import { Player } from "./player";
 
@@ -11,14 +11,17 @@ type Entry =
   | { step: "loading" }
   | { step: "missing" }
   | { step: "failed"; message: (t: Messages) => string }
-  /** The room exists but this browser does not have its ROM yet. */
+  /** The room exists but this browser does not have its ROM: get it from someone in the room. */
+  | { step: "fetching"; info: RoomInfo; bytes: number }
+  /** Nobody could send it: the joiner loads their own copy. */
   | { step: "needRom"; info: RoomInfo }
   | { step: "ready"; info: RoomInfo; rom: StoredRom };
 
 /**
- * Resolves a room link into something playable: the room must exist and this
- * browser must hold the exact ROM it was created with (ROMs never leave the
- * browser, so a joiner brings their own copy and we check it by hash).
+ * Resolves a room link into something playable: the room must exist, and we
+ * need the exact ROM it was created with. Ours if this browser has it; else a
+ * player in the room sends theirs (kept for this room only, not in the
+ * library); failing that, the joiner loads their own copy, checked by hash.
  */
 export function RoomEntry({ roomId, knownRom, onExit }: { roomId: string; knownRom: StoredRom | null; onExit: () => void }) {
   const { t } = useI18n();
@@ -33,7 +36,7 @@ export function RoomEntry({ roomId, knownRom, onExit }: { roomId: string; knownR
       const info = await getRoom(roomId);
       if (!info) return { step: "missing" } as const;
       const rom = knownRom?.hash === info.romHash ? knownRom : await getRom(info.romHash);
-      return rom ? ({ step: "ready", info, rom } as const) : ({ step: "needRom", info } as const);
+      return rom ? ({ step: "ready", info, rom } as const) : ({ step: "fetching", info, bytes: 0 } as const);
     })().then(
       (next) => !cancelled && setEntry(next),
       (e: Error) =>
@@ -44,6 +47,30 @@ export function RoomEntry({ roomId, knownRom, onExit }: { roomId: string; knownR
       cancelled = true;
     };
   }, [roomId, knownRom]);
+
+  // Ask the room for its ROM. Received ROMs are used for this room only.
+  const fetchingInfo = entry.step === "fetching" ? entry.info : null;
+  useEffect(() => {
+    if (!fetchingInfo) return;
+    let cancelled = false;
+    fetchRoomRom(fetchingInfo, (bytes) => !cancelled && setEntry({ step: "fetching", info: fetchingInfo, bytes })).then(
+      (data) => {
+        if (cancelled) return;
+        const rom: StoredRom = {
+          hash: fetchingInfo.romHash, name: fetchingInfo.romName, size: data.length, addedAt: Date.now(), data,
+        };
+        setEntry({ step: "ready", info: fetchingInfo, rom });
+      },
+      (e: Error) => {
+        if (cancelled) return;
+        setEntry({ step: "needRom", info: fetchingInfo });
+        setError(() => (t: Messages) => (e instanceof RoomApiError ? t.apiErrors[e.code] : e.message));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchingInfo]);
 
   const importRom = async (file: File | undefined) => {
     if (!file || entry.step !== "needRom") return;
@@ -75,6 +102,14 @@ export function RoomEntry({ roomId, knownRom, onExit }: { roomId: string; knownR
       {entry.step === "loading" && <p className="text-sm text-muted-foreground">{t.entry.loading}</p>}
       {entry.step === "missing" && <p className="text-sm text-muted-foreground">{t.entry.missing}</p>}
       {entry.step === "failed" && <p className="text-sm text-destructive">{entry.message(t)}</p>}
+      {entry.step === "fetching" && (
+        <p className="text-sm text-muted-foreground">
+          {t.entry.fetchingRom(
+            <span className="font-medium text-foreground">{entry.info.romName || t.entry.unnamedGame}</span>,
+            Math.round(entry.bytes / 1024),
+          )}
+        </p>
+      )}
       {entry.step === "needRom" && (
         <>
           <p className="text-sm text-muted-foreground">
@@ -82,10 +117,22 @@ export function RoomEntry({ roomId, knownRom, onExit }: { roomId: string; knownR
               <span className="font-medium text-foreground">{entry.info.romName || t.entry.unnamedGame}</span>,
             )}
           </p>
-          <Button variant="outline" onClick={() => inputRef.current?.click()}>
-            <Upload data-icon="inline-start" />
-            {t.entry.pickRom}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setError(null);
+                setEntry({ step: "fetching", info: entry.info, bytes: 0 });
+              }}
+            >
+              <RefreshCw data-icon="inline-start" />
+              {t.entry.retry}
+            </Button>
+            <Button variant="outline" onClick={() => inputRef.current?.click()}>
+              <Upload data-icon="inline-start" />
+              {t.entry.pickRom}
+            </Button>
+          </div>
           <input
             ref={inputRef}
             type="file"

@@ -10,6 +10,7 @@ import {
   NETPLAY_LOAD,
   NETPLAY_RESET,
   NETPLAY_SNAPSHOT_INTERVAL,
+  ROM_CHUNK_BYTES,
   MAX_ROLLBACK,
   type FromWorker,
   type ToAudio,
@@ -618,6 +619,12 @@ function joinRoom(
     onReaction: (from, kind) => post({ type: "netReaction", from, kind }),
     onLoad: (seat, loadFrame, data) => addLoad(seat, loadFrame, fromBase64(data)),
     onCheats: (cheatFrame, codes) => addCheatChange(cheatFrame, codes),
+    // Pass our ROM on to someone joining without it; the room streams it to them.
+    onRomRequest: (id) => {
+      const chunks: string[] = [];
+      if (rom) for (let i = 0; i < rom.length; i += ROM_CHUNK_BYTES) chunks.push(toBase64(rom.subarray(i, i + ROM_CHUNK_BYTES)));
+      link?.sendRom(id, rom ? chunks : null);
+    },
     onStandIn: standIn,
     onHandover: handOver,
   }, simulated, resume);
