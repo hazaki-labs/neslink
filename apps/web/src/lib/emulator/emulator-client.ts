@@ -165,6 +165,11 @@ export class EmulatorClient {
     });
   }
 
+  /** The cheat codes to run with (in a room, only the host's apply, for everyone). */
+  setCheats(codes: string[]): void {
+    this.send({ type: "setCheats", codes });
+  }
+
   loadState(state: Uint8Array<ArrayBuffer>): void {
     const copy = state.slice();
     this.send({ type: "loadState", state: copy }, [copy.buffer]);

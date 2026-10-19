@@ -5,6 +5,7 @@ import {
   NES_HEIGHT,
   NES_WIDTH,
   NETPLAY_HASH_INTERVAL,
+  NETPLAY_CHEATS,
   NETPLAY_EVENTS,
   NETPLAY_LOAD,
   NETPLAY_RESET,
@@ -23,6 +24,8 @@ import {
   type ControllerState,
   RollbackSession,
   WasmCore,
+  cheatPatches,
+  type CheatChange,
 } from "@neslink/core";
 import { NetplayLink, type GameStart, type NetSession, type RoomCredentials, type SimulatedNetwork } from "./netplay-link";
 
@@ -73,6 +76,46 @@ let loadedAt: number | null = null;
  * each with the next frame to fill. See ServerMessage "standIn".
  */
 const standingIn = new Map<number, number>();
+/** The player's own enabled cheats: run alone, or sent for everyone by a netplay host. */
+let localCheats: string[] = [];
+/** A host's cheat change waiting to go out: our next input carries NETPLAY_CHEATS. */
+let pendingCheats: string[] | null = null;
+/** The netplay game's cheat changes, oldest first, back to the one in force at the oldest unfinal frame. */
+let cheatTimeline: CheatChange[] = [];
+/** The codes the core runs with now, joined, so unchanged sets are not reapplied. */
+let appliedCheats = "";
+
+/** Make the core run with exactly these cheats. */
+function applyCheats(codes: readonly string[]) {
+  const key = codes.join("\n");
+  if (key === appliedCheats) return;
+  core!.setPatches(cheatPatches(codes));
+  appliedCheats = key;
+}
+
+/** The game's cheats in force while running frames before `frame`. */
+function cheatsBefore(frame: number): string[] {
+  let codes: string[] = [];
+  for (const change of cheatTimeline) if (change.f < frame) codes = change.codes;
+  return codes;
+}
+
+/** Record the cheats that take over at `frame` (one change per frame). */
+function addCheatChange(frame: number, codes: string[]) {
+  cheatTimeline = cheatTimeline.filter((change) => change.f !== frame);
+  cheatTimeline.push({ f: frame, codes });
+  cheatTimeline.sort((a, b) => a.f - b.f);
+}
+
+/** Frames up to `final` never run again: keep only the change in force there, and later ones. */
+function pruneCheats(final: number) {
+  while (cheatTimeline.length > 1 && cheatTimeline[1].f <= final) cheatTimeline.shift();
+}
+
+function sameCodes(a: readonly string[], b: readonly string[]) {
+  return a.length === b.length && a.every((code, i) => code === b[i]);
+}
+
 /** Newest frame whose reset or load was announced, so re-running it in a rollback stays quiet. */
 let announcedThrough = -1;
 /** Netplay frames the clock says are due but that could not run yet. */
@@ -160,6 +203,14 @@ function applyEvents(frameInputs: readonly number[], frameNumber: number) {
     core!.reset();
     if (announce) post({ type: "netReset" });
   }
+  if (frameInputs.some((mask) => mask & NETPLAY_CHEATS)) {
+    // The host's cheats switch on this frame; a load below leaves them alone (they are not in states).
+    const change = cheatTimeline.find((c) => c.f === frameNumber);
+    if (change) {
+      applyCheats(change.codes);
+      if (announce) post({ type: "netCheats", codes: change.codes, initial: false });
+    }
+  }
   frameInputs.forEach((mask, seat) => {
     if (!(mask & NETPLAY_LOAD) || frameNumber === loadedAt) return;
     const state = loads.get(frameNumber)?.get(seat);
@@ -176,8 +227,9 @@ function addLoad(seat: number, frame: number, state: Uint8Array) {
   seats.set(seat, state);
 }
 
-/** Whether an input can be accepted yet: a load needs its save state first. */
+/** Whether an input can be accepted yet: a load needs its save state, a cheat change its codes. */
 function loadArrived(seat: number, frame: number, mask: number) {
+  if (mask & NETPLAY_CHEATS && !cheatTimeline.some((change) => change.f === frame)) return false;
   return !(mask & NETPLAY_LOAD) || loads.get(frame)?.has(seat) === true;
 }
 
@@ -205,6 +257,7 @@ function spectate(session: LockstepSession, live: boolean) {
   const frameNumber = session.frame;
   step(session.advance().inputs, live, frameNumber);
   loads.delete(frameNumber);
+  pruneCheats(frameNumber);
 }
 
 /** A spectator follows the confirmed inputs; returns frames shown this refresh. */
@@ -236,21 +289,27 @@ function tickPlayer(session: RollbackSession, due: number): boolean {
   const replayed = session.resolve();
   let ran = 0;
   while (owedFrames > 0 && session.canAdvance()) {
-    const mask = localMask(session.frame) | (resetPending ? NETPLAY_RESET : 0) | (pendingLoad ? NETPLAY_LOAD : 0);
-    // Our input goes to this frame; a load's state must be in place before it runs.
+    const mask = localMask(session.frame) | (resetPending ? NETPLAY_RESET : 0) | (pendingLoad ? NETPLAY_LOAD : 0) |
+      (pendingCheats ? NETPLAY_CHEATS : 0);
+    // Our input goes to this frame; a load's state (or new cheats) must be in place before it runs.
     const target = session.frame + session.delay;
     if (pendingLoad) addLoad(session.localSeat, target, pendingLoad);
+    const previousCheats = cheatTimeline;
+    if (pendingCheats) addCheatChange(target, pendingCheats);
     const localFrame = session.advance(mask);
     // Null right after a rejoin, while frames whose input we already sent come round.
     if (localFrame !== null) {
       // The state goes ahead of the input on the room socket, so nobody gets one without the other.
       if (pendingLoad) link!.sendLoad(localFrame, toBase64(pendingLoad));
+      if (pendingCheats) link!.sendCheats(localFrame, pendingCheats);
       link!.sendInput(localFrame, mask, session.localAdvantage());
       peerHistory.push(localFrame, mask);
       resetPending = false;
       pendingLoad = null;
-    } else if (pendingLoad) {
-      loads.get(target)?.delete(session.localSeat);
+      pendingCheats = null;
+    } else {
+      if (pendingLoad) loads.get(target)?.delete(session.localSeat);
+      cheatTimeline = previousCheats;
     }
     fillVacantSeats(session);
     owedFrames--;
@@ -467,6 +526,11 @@ function startGame(game: GameStart): NetSession | null {
   pendingLoad = null;
   standingIn.clear();
   loads.clear();
+  // Only the game's cheats count: the host's, as the room logged them.
+  cheatTimeline = [...game.cheats];
+  pendingCheats = null;
+  applyCheats(cheatsBefore(game.startFrame));
+  post({ type: "netCheats", codes: cheatsBefore(game.startFrame), initial: true });
   loadedAt = game.snapshotLoaded ? game.startFrame : null;
   announcedThrough = game.startFrame - 1;
 
@@ -478,7 +542,11 @@ function startGame(game: GameStart): NetSession | null {
   } else {
     const rollback = new RollbackSession(game.seats, game.localSeat, game.delay, {
       save: (slot) => emulator.saveSlot(slot),
-      load: (slot) => emulator.loadSlot(slot),
+      load: (slot, before) => {
+        emulator.loadSlot(slot);
+        // Cheats are not part of a state: put back the ones in force there.
+        applyCheats(cheatsBefore(before));
+      },
       run: (frameInputs, replay, frameNumber) => step(frameInputs, !replay, frameNumber),
       hash: () => emulator.stateHash(),
     }, game.startFrame);
@@ -487,6 +555,7 @@ function startGame(game: GameStart): NetSession | null {
       const next = final + 1;
       // Final frames never run again, so their loads are done with.
       loads.delete(final);
+      pruneCheats(final);
       if (next % NETPLAY_HASH_INTERVAL === 0) link!.sendHash(final, hash);
       // The first seat keeps the room's snapshot fresh for spectators who join late.
       if (uploadsSnapshots && next % NETPLAY_SNAPSHOT_INTERVAL === 0) {
@@ -503,6 +572,9 @@ function startGame(game: GameStart): NetSession | null {
       peerHistory.push(f, m);
     }
     rollback.catchUp();
+    // A host brings its own cheats into the game (or back to it, after a rejoin) if they differ.
+    const latest = cheatTimeline.at(-1)?.codes ?? [];
+    if (link!.isHost && !sameCodes(latest, localCheats)) pendingCheats = [...localCheats];
     // As the first seat, fill in the seats nobody plays, from where the room's log leaves off.
     if (game.localSeat === game.seats[0]) {
       for (const seat of game.vacant) standingIn.set(seat, rollback.receivedThrough(seat) + 1);
@@ -545,6 +617,7 @@ function joinRoom(
     onCredentials: (credentials) => post({ type: "netCredentials", ...credentials }),
     onReaction: (from, kind) => post({ type: "netReaction", from, kind }),
     onLoad: (seat, loadFrame, data) => addLoad(seat, loadFrame, fromBase64(data)),
+    onCheats: (cheatFrame, codes) => addCheatChange(cheatFrame, codes),
     onStandIn: standIn,
     onHandover: handOver,
   }, simulated, resume);
@@ -565,6 +638,8 @@ async function handle(message: ToWorker) {
       if (!core) throw new Error("Worker not initialised");
       rom = message.rom;
       core.loadRom(rom);
+      // Alone, our cheats run from the start; a room's game sets its own when it starts.
+      if (!link) applyCheats(localCheats);
       romLoaded = true;
       frame = 0;
       post({ type: "romLoaded" });
@@ -589,6 +664,15 @@ async function handle(message: ToWorker) {
       }
       core?.reset();
       frame = 0;
+      break;
+    case "setCheats":
+      localCheats = message.codes;
+      if (inNetGame()) {
+        // In a game only the host's count, for everyone, through its next input.
+        if (link!.session instanceof RollbackSession && link!.isHost) pendingCheats = [...message.codes];
+      } else if (!link && core) {
+        applyCheats(localCheats);
+      }
       break;
     case "saveState": {
       if (!core || !romLoaded) throw new Error("No game running");

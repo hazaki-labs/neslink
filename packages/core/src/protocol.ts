@@ -19,6 +19,11 @@ export type ToWorker =
   | { type: "reset" }
   | { type: "saveState"; requestId: number }
   | { type: "loadState"; state: Uint8Array<ArrayBuffer> }
+  /**
+   * The cheat codes to run with. Alone they apply at once; in a netplay game
+   * only the host's count, and they apply for everyone from one frame.
+   */
+  | { type: "setCheats"; codes: string[] }
   /** Whether the page is hidden; netplay keeps running on a timer when it is. */
   | { type: "visibility"; hidden: boolean }
   /** Connect to a netplay room; the worker owns the socket so inputs skip the UI thread. */
@@ -94,7 +99,9 @@ export type FromWorker =
   /** The host reset the netplay game (the console's reset button). */
   | { type: "netReset" }
   /** A player in the netplay game loaded a save state, for everyone. */
-  | { type: "netLoaded"; seat: number };
+  | { type: "netLoaded"; seat: number }
+  /** The cheats the netplay game runs with changed (the host's); `codes` are now in force. */
+  | { type: "netCheats"; codes: string[]; initial: boolean };
 
 /** Messages from the worker to the AudioWorklet. `samples` is mono. */
 export type ToAudio = { type: "samples"; samples: Float32Array<ArrayBuffer> } | { type: "flush" };

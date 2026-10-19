@@ -1,4 +1,5 @@
 import init, { Nes } from "@neslink/nes-wasm";
+import type { CheatPatch } from "./cheats";
 import {
   MAX_PLAYERS,
   NES_HEIGHT,
@@ -27,6 +28,12 @@ export class WasmCore implements EmulatorCore {
 
   reset(): void {
     this.nes.reset();
+  }
+
+  /** Replace the cheats in force. They outlive save states, rollback slots and ROM loads. */
+  setPatches(patches: readonly CheatPatch[]): void {
+    this.nes.clearPatches();
+    for (const patch of patches) this.nes.addPatch(patch.addr, patch.data, patch.compare ?? -1);
   }
 
   runFrame(inputs: readonly number[]): void {

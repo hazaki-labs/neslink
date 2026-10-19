@@ -97,7 +97,7 @@ describe("redundant packets over a lossy channel", () => {
 
 describe("unpackInputs events", () => {
   it("keeps the reset and load bits and drops masks past them", () => {
-    const packet: PeerPacket = { t: "in", s: 0, f: 3, m: [1, NETPLAY_RESET | 1, NETPLAY_LOAD, 0x400], a: 0, k: 0 };
+    const packet: PeerPacket = { t: "in", s: 0, f: 3, m: [1, NETPLAY_RESET | 1, NETPLAY_LOAD, 0x800], a: 0, k: 0 };
     expect(unpackInputs(packet)).toEqual([[0, 1], [1, NETPLAY_RESET | 1], [2, NETPLAY_LOAD]]);
   });
 });

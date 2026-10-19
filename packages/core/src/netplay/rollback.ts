@@ -4,8 +4,8 @@ import { NETPLAY_EVENTS, NETPLAY_SEATS } from "./protocol";
 export interface RollbackHost {
   /** Save the current state (before running a frame) into `slot`. */
   save(slot: number): void;
-  /** Restore the state saved in `slot`. */
-  load(slot: number): void;
+  /** Restore the state saved in `slot`: the state just before `frame`. */
+  load(slot: number, frame: number): void;
   /** Run `frame`. `replay` marks a re-simulation of a frame already shown: skip its audio. */
   run(inputs: readonly number[], replay: boolean, frame: number): void;
   /** Hash of the state right after a run, for desync checks across machines. */
@@ -228,7 +228,7 @@ export class RollbackSession {
     if (this.rollbackFrom !== null) {
       const from = this.rollbackFrom;
       this.rollbackFrom = null;
-      this.host.load(from % ROLLBACK_SLOTS);
+      this.host.load(from % ROLLBACK_SLOTS, from);
       for (let frame = from; frame < this.next; frame++) {
         this.runFrame(frame, true);
         replayed++;

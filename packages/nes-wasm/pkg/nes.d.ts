@@ -4,7 +4,18 @@
 export class Nes {
     free(): void;
     [Symbol.dispose](): void;
+    /**
+     * Cheat: reads of `addr` return `data` (only where the byte there is `compare`,
+     * when `compare` is 0..=255; pass -1 for none). Game Genie codes are decoded to
+     * these by the caller. Patches belong to the session: save states, rollback
+     * slots and loading a ROM leave them alone.
+     */
+    addPatch(addr: number, data: number, compare: number): void;
     audioPtr(): number;
+    /**
+     * Remove every cheat.
+     */
+    clearPatches(): void;
     /**
      * Moves pending mono samples into an internal buffer; returns how many there are.
      * Read them from [`Nes::audio_ptr`] before the next call.
@@ -53,7 +64,9 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_nes_free: (a: number, b: number) => void;
+    readonly nes_addPatch: (a: number, b: number, c: number, d: number) => void;
     readonly nes_audioPtr: (a: number) => number;
+    readonly nes_clearPatches: (a: number) => void;
     readonly nes_drainAudio: (a: number) => number;
     readonly nes_framePtr: (a: number) => number;
     readonly nes_loadRom: (a: number, b: number, c: number, d: number, e: number) => [number, number];
