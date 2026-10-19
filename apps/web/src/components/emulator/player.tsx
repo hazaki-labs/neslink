@@ -250,7 +250,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
   const canSave = !roomId || net.playing;
   const canLoad = (!roomId || playingSeat) && hasSave;
 
-  // T saves, 0 loads. The handler reads the latest state through a ref.
+  // 1 saves, 0 loads (main row or numpad). The handler reads the latest state through a ref.
   const quickKeys = useRef({ canSave, canLoad, saveState, loadState });
   useEffect(() => {
     quickKeys.current = { canSave, canLoad, saveState, loadState };
@@ -261,7 +261,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
       if (event.repeat) return;
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       const keys = quickKeys.current;
-      if (event.code === "KeyT" && keys.canSave) void keys.saveState();
+      if ((event.code === "Digit1" || event.code === "Numpad1") && keys.canSave) void keys.saveState();
       else if ((event.code === "Digit0" || event.code === "Numpad0") && keys.canLoad) void keys.loadState();
     };
     window.addEventListener("keydown", onKey);
@@ -405,7 +405,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         <dt>Select / Start</dt>
         <dd>V / B</dd>
         <dt>{t.player.controls.saveLoad}</dt>
-        <dd>T / 0</dd>
+        <dd>1 / 0</dd>
         <dt>{t.player.controls.gamepad}</dt>
         <dd>{t.player.controls.gamepadHint}</dd>
         {roomId && (
