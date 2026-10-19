@@ -19,7 +19,7 @@ const zh = {
   },
   library: {
     title: "游戏库",
-    intro: "载入你自己的 .nes 文件开始游戏。ROM 只保存在这个浏览器里，不会上传。",
+    intro: "载入你自己的 .nes 文件开始游戏。ROM 保存在这个浏览器里；联机时，房间里没有这个游戏的人会从你这里收到一份，只在房间里用，服务器不保存。",
     dropHint: "点击选择或拖入 .nes 文件",
     play: "开始",
     host: "联机",
@@ -123,8 +123,12 @@ const zh = {
     loading: "正在读取房间…",
     missing: "房间不存在，可能已经过期或链接有误。",
     needRom: (game: ReactNode) => (
-      <>这个房间玩的是 {game}。请载入你自己的同一个 ROM 文件，校验一致后即可入座。</>
+      <>这个房间玩的是 {game}，暂时没能从房间里的人那里拿到。你也可以载入自己的同一个 ROM 文件，校验一致后即可入座。</>
     ),
+    fetchingRom: (game: ReactNode, kb: number) => (
+      <>正在从房间里的人那里获取 {game}…{kb > 0 ? `（${kb} KB）` : ""}</>
+    ),
+    retry: "重新获取",
     unnamedGame: "未命名游戏",
     pickRom: "选择 .nes 文件",
     romHashMismatch: "这不是房间使用的那个 ROM（校验值不一致）",
@@ -151,6 +155,7 @@ const zh = {
     relayUnavailable: "中转节点暂不可用",
     connectionDenied: "连接凭据申请被拒绝",
     tooManyRequests: "申请过于频繁，请稍后重试",
+    romUnavailable: "房间里暂时没有人能提供这个游戏",
     createFailed: "创建房间失败",
     loadFailed: "读取房间失败",
   } satisfies Record<ApiErrorCode | "createFailed" | "loadFailed", string>,
@@ -175,7 +180,7 @@ const en: Messages = {
   },
   library: {
     title: "Library",
-    intro: "Load your own .nes files to play. ROMs stay in this browser and are never uploaded.",
+    intro: "Load your own .nes files to play. ROMs stay in this browser; in a room, anyone without the game gets a copy from you for that room only, passed through the server without being stored.",
     dropHint: "Click to choose or drop .nes files here",
     play: "Play",
     host: "Netplay",
@@ -278,7 +283,11 @@ const en: Messages = {
     title: "Join room",
     loading: "Loading room…",
     missing: "This room doesn't exist. It may have expired, or the link is wrong.",
-    needRom: (game) => <>This room is playing {game}. Load your own copy of the same ROM to join; it is checked by hash.</>,
+    needRom: (game) => (
+      <>This room is playing {game}, and nobody in it could send it just now. You can also load your own copy of the same ROM; it is checked by hash.</>
+    ),
+    fetchingRom: (game, kb) => <>Getting {game} from the room…{kb > 0 ? ` (${kb} KB)` : ""}</>,
+    retry: "Try again",
     unnamedGame: "an untitled game",
     pickRom: "Choose a .nes file",
     romHashMismatch: "That's not the ROM this room uses (hash mismatch)",
@@ -305,6 +314,7 @@ const en: Messages = {
     relayUnavailable: "Relay node unavailable",
     connectionDenied: "Connection ticket request denied",
     tooManyRequests: "Too many requests; try again shortly",
+    romUnavailable: "Nobody in the room can send this game right now",
     createFailed: "Couldn't create the room",
     loadFailed: "Couldn't load the room",
   },

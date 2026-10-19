@@ -43,11 +43,16 @@ export default {
       return turnServers(env);
     }
 
-    const match = url.pathname.match(/^\/api\/rooms\/([a-z0-9]{6})(\/ws)?$/);
+    const match = url.pathname.match(/^\/api\/rooms\/([a-z0-9]{6})(\/ws|\/rom)?$/);
     if (match) {
-      const [, id, ws] = match;
+      const [, id, sub] = match;
       const room = env.ROOMS.get(env.ROOMS.idFromName(id));
-      if (ws) return room.fetch(request);
+      if (sub === "/ws") return room.fetch(request);
+      // The room's ROM, from a player who has it, for someone joining without it.
+      if (sub === "/rom") {
+        if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
+        return room.fetch(request);
+      }
       if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
       const info = await room.getInfo();
       return info ? Response.json(info) : apiError("roomNotFound", 404);

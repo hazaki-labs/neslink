@@ -70,7 +70,19 @@ export type RoomErrorCode =
   | "playerReconnecting";
 
 /** Errors from the HTTP rooms API, as `{ error: code }`. */
-export type ApiErrorCode = "roomNotFound" | "badRequest" | "missingRomHash" | "relayUnavailable" | "connectionDenied" | "tooManyRequests";
+export type ApiErrorCode =
+  | "roomNotFound"
+  | "badRequest"
+  | "missingRomHash"
+  | "relayUnavailable"
+  | "connectionDenied"
+  | "tooManyRequests"
+  | "romUnavailable";
+
+/** Raw bytes per chunk when a player sends the room's ROM to someone joining without it. */
+export const ROM_CHUNK_BYTES = 192 * 1024;
+/** Largest ROM the room passes on (the biggest NES carts are a few MB). */
+export const ROM_MAX_BYTES = 8 * 1024 * 1024;
 
 /** Why a game in progress ended for this client. */
 export type RoomEndReason = "peerLeft" | "disconnected";
@@ -150,7 +162,11 @@ export type ClientMessage =
   /** Host only: these cheat codes apply from frame `f` on (its input there has NETPLAY_CHEATS). */
   | { t: "cheats"; f: number; codes: string[] }
   /** WebRTC signaling (offer, answer, ICE candidate) for player `to`; relayed as is. */
-  | { t: "signal"; to: string; data: unknown };
+  | { t: "signal"; to: string; data: unknown }
+  /** Part `i` of `n` of the room's ROM (base64), answering `romRequest` `id`. */
+  | { t: "romChunk"; id: string; i: number; n: number; d: string }
+  /** Can't answer `romRequest` `id` (no ROM loaded). */
+  | { t: "romUnavailable"; id: string };
 
 export type ServerMessage =
   /** `resumeToken`: keep it (per room, per tab) to rejoin as `you` after a drop. */
@@ -193,4 +209,9 @@ export type ServerMessage =
   | { t: "cheats"; f: number; codes: string[] }
   | { t: "desync"; f: number }
   | { t: "signal"; from: string; data: unknown }
-  | { t: "error"; code: RoomErrorCode };
+  | { t: "error"; code: RoomErrorCode }
+  /**
+   * Someone joining without the room's ROM asks for it: send it in `romChunk`s
+   * (ROM_CHUNK_BYTES each), which the room streams to them without keeping it.
+   */
+  | { t: "romRequest"; id: string };

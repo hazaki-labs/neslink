@@ -9,6 +9,8 @@ import {
   NETPLAY_PONG,
   NETPLAY_RECONNECT_GRACE_MS,
   NETPLAY_SEATS,
+  ROM_CHUNK_BYTES,
+  ROM_MAX_BYTES,
   type ClientMessage,
   type RoomInfo,
   type RoomPlayer,
@@ -33,6 +35,21 @@ const MAX_SNAPSHOT_CHARS = 512 * 1024;
 const MAX_SIGNAL_CHARS = 32 * 1024;
 /** Fewest milliseconds between two reactions from one player. */
 const REACTION_SPACING_MS = 400;
+/** ROM transfers at once, and how long one may take. */
+const MAX_ROM_TRANSFERS = 3;
+const ROM_TRANSFER_MS = 30_000;
+/** A chunk's base64 is 4/3 of ROM_CHUNK_BYTES; allow a little over. */
+const MAX_ROM_CHUNK_CHARS = Math.ceil(ROM_CHUNK_BYTES / 3) * 4 + 16;
+
+/** A ROM on its way from a player to someone joining without it, through this room. */
+interface RomTransfer {
+  /** Who sends it. */
+  holderId: string;
+  writer: WritableStreamDefaultWriter<Uint8Array>;
+  next: number;
+  bytes: number;
+  timer: ReturnType<typeof setTimeout>;
+}
 
 /** Per-socket player data. Stored on the socket so it survives hibernation. */
 interface Attachment extends RoomPlayer {
@@ -98,6 +115,8 @@ export class Room extends DurableObject<Env> {
   private pending = new Map<string, PendingPlayer>();
   /** id -> last reaction time, for rate limiting. */
   private readonly reactedAt = new Map<string, number>();
+  /** ROM transfers in flight, by request id. In memory only: the ROM is never stored. */
+  private readonly romTransfers = new Map<string, RomTransfer>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -162,6 +181,7 @@ export class Room extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     if (!this.info) return new Response("Room not found", { status: 404 });
+    if (new URL(request.url).pathname.endsWith("/rom")) return this.serveRom();
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected WebSocket", { status: 426 });
     }
@@ -275,6 +295,14 @@ export class Room extends DurableObject<Env> {
       case "cheats":
         if (this.playing(me) && me.id === this.hostId && isFrame(message.f) && isCheatList(message.codes)) {
           await this.changeCheats(ws, message.f, message.codes);
+        }
+        break;
+      case "romChunk":
+        if (me && typeof message.id === "string") this.romChunk(me, message.id, message.i, message.n, message.d);
+        break;
+      case "romUnavailable":
+        if (me && typeof message.id === "string" && this.romTransfers.get(message.id)?.holderId === me.id) {
+          this.endRomTransfer(message.id, false);
         }
         break;
       case "signal":
@@ -566,6 +594,57 @@ export class Room extends DurableObject<Env> {
     this.broadcast({ t: "start", delay, seats, vacant });
   }
 
+  /**
+   * Stream the room's ROM to someone joining without it: a connected player
+   * holding it (the host first) sends it in chunks over their socket, and each
+   * chunk goes straight into the response. Nothing is kept.
+   */
+  private serveRom(): Response {
+    if (this.romTransfers.size >= MAX_ROM_TRANSFERS) return Response.json({ error: "tooManyRequests" }, { status: 429 });
+    const holders = this.ctx.getWebSockets().filter((ws) => this.player(ws)?.romHash === this.info!.romHash);
+    const holder = holders.find((ws) => this.player(ws)!.id === this.hostId) ?? holders[0];
+    if (!holder) return Response.json({ error: "romUnavailable" }, { status: 404 });
+    const id = crypto.randomUUID();
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const timer = setTimeout(() => this.endRomTransfer(id, false), ROM_TRANSFER_MS);
+    this.romTransfers.set(id, { holderId: this.player(holder)!.id, writer: writable.getWriter(), next: 0, bytes: 0, timer });
+    this.send(holder, { t: "romRequest", id });
+    return new Response(readable, {
+      headers: { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" },
+    });
+  }
+
+  private romChunk(me: Attachment, id: string, i: unknown, n: unknown, data: unknown) {
+    const transfer = this.romTransfers.get(id);
+    if (!transfer || transfer.holderId !== me.id) return;
+    const valid = i === transfer.next && Number.isInteger(n) && (n as number) >= 1 &&
+      (n as number) * ROM_CHUNK_BYTES <= ROM_MAX_BYTES + ROM_CHUNK_BYTES &&
+      typeof data === "string" && data.length <= MAX_ROM_CHUNK_CHARS;
+    let bytes: Uint8Array | null = null;
+    try {
+      if (valid) bytes = Uint8Array.from(atob(data as string), (c) => c.charCodeAt(0));
+    } catch {
+      bytes = null;
+    }
+    if (!bytes || transfer.bytes + bytes.length > ROM_MAX_BYTES) return this.endRomTransfer(id, false);
+    transfer.next++;
+    transfer.bytes += bytes.length;
+    // Queued, not awaited: a write resolves only once the joiner reads it, and
+    // waiting would hold up the room's other messages. A ROM is at most a few MB.
+    transfer.writer.write(bytes).catch(() => this.endRomTransfer(id, false));
+    if (transfer.next === n) this.endRomTransfer(id, true);
+  }
+
+  /** Finish a transfer: close the response, or abort it so the joiner sees it failed. */
+  private endRomTransfer(id: string, complete: boolean) {
+    const transfer = this.romTransfers.get(id);
+    if (!transfer) return;
+    this.romTransfers.delete(id);
+    clearTimeout(transfer.timer);
+    const done = complete ? transfer.writer.close() : transfer.writer.abort(new Error("ROM transfer failed"));
+    done.catch(() => {});
+  }
+
   private async leave(ws: WebSocket, intentional: boolean) {
     const me = this.player(ws);
     ws.serializeAttachment(null);
@@ -575,6 +654,7 @@ export class Room extends DurableObject<Env> {
       // Already closed.
     }
     if (!me) return;
+    for (const [id, transfer] of this.romTransfers) if (transfer.holderId === me.id) this.endRomTransfer(id, false);
     // Someone still waiting to take over a seat has nothing to come back to.
     const handingOver = this.game?.handover?.id === me.id;
     if (me.seat !== null && !intentional && !handingOver) {
