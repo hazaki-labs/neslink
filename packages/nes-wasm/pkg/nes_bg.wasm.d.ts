@@ -2,7 +2,9 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __wbg_nes_free: (a: number, b: number) => void;
+export const nes_addPatch: (a: number, b: number, c: number, d: number) => void;
 export const nes_audioPtr: (a: number) => number;
+export const nes_clearPatches: (a: number) => void;
 export const nes_drainAudio: (a: number) => number;
 export const nes_framePtr: (a: number) => number;
 export const nes_loadRom: (a: number, b: number, c: number, d: number, e: number) => [number, number];

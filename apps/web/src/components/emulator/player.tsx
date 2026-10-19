@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Download, Gamepad2, Maximize, Pause, Play, RotateCcw, Save } from "lucide-react";
+import { ArrowLeft, Download, Gamepad2, Maximize, Pause, Play, RotateCcw, Save, Sparkles } from "lucide-react";
 import {
   NES_FRAME_RATE,
   NES_HEIGHT,
@@ -8,6 +8,7 @@ import {
   type RoomEndReason,
   type RoomInfo,
   type RoomState,
+  type Cheat,
 } from "@neslink/core";
 import { Button } from "@/components/ui/button";
 import { useI18n, type Messages } from "@/i18n";
@@ -21,6 +22,8 @@ import {
 import { useControllerInput } from "@/lib/emulator/use-controller-input";
 import { directLinkPolicy, playerName, roomSocketUrl, setPlayerName, simulatedNetwork } from "@/lib/rooms";
 import { getSave, putSave, type StoredRom } from "@/lib/storage";
+import { loadCheats, saveCheats } from "@/lib/cheats";
+import { CheatPanel } from "./cheat-panel";
 import { RoomLobby } from "./room-lobby";
 
 const QUICK_SLOT = 0;
@@ -113,6 +116,10 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
   /** Thumbs-ups floating up the screen: who sent each (null for us) and where it drifts. */
   const [reactions, setReactions] = useState<{ id: number; from: string | null; x: number }[]>([]);
   const reactionId = useRef(0);
+  /** Our cheats for this ROM, and what the room's game runs with (the host's). */
+  const [cheats, setCheats] = useState<Cheat[]>(() => loadCheats(rom.hash));
+  const [showCheats, setShowCheats] = useState(false);
+  const [roomCheats, setRoomCheats] = useState<string[]>([]);
   const lastReaction = useRef(0);
 
   function showReaction(from: string | null) {
@@ -139,6 +146,10 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         else if (event.type === "netError") flash((t) => t.roomErrors[event.code], 4000);
         else if (event.type === "netReaction") showReaction(event.from);
         else if (event.type === "netReset") flash((t) => t.player.hostReset);
+        else if (event.type === "netCheats") {
+          setRoomCheats(event.codes);
+          if (!event.initial) flash((t) => t.player.cheatsChanged(event.codes.length));
+        }
         else if (event.type === "netLoaded") flash((t) => t.player.seatLoaded(event.seat + 1));
         else setNet((view) => applyNetEvent(view, event));
       },
@@ -175,6 +186,23 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
       cancelled = true;
     };
   }, [rom]);
+
+  // Another ROM: its own cheats (adjusted while rendering, as React recommends for derived state).
+  const [cheatsRom, setCheatsRom] = useState(rom.hash);
+  if (cheatsRom !== rom.hash) {
+    setCheatsRom(rom.hash);
+    setCheats(loadCheats(rom.hash));
+  }
+
+  // The worker runs with our checked cheats (in a room, only a host's go to the game).
+  useEffect(() => {
+    client?.setCheats(cheats.filter((c) => c.enabled).map((c) => c.code));
+  }, [client, cheats]);
+
+  const changeCheats = (next: Cheat[]) => {
+    setCheats(next);
+    saveCheats(rom.hash, next);
+  };
 
   useControllerInput(client);
 
@@ -389,11 +417,24 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
             {t.player.load}
           </Button>
         )}
+        <Button variant="outline" aria-expanded={showCheats} onClick={() => setShowCheats((open) => !open)}>
+          <Sparkles data-icon="inline-start" />
+          {t.cheats.title}
+        </Button>
         <Button variant="outline" className="ml-auto" onClick={() => screenRef.current?.requestFullscreen()}>
           <Maximize data-icon="inline-start" />
           {t.player.fullscreen}
         </Button>
       </div>
+
+      {showCheats && (
+        <CheatPanel
+          cheats={cheats}
+          onChange={changeCheats}
+          mode={!roomId ? "solo" : isHost ? "host" : "guest"}
+          roomCodes={roomId ? roomCheats : null}
+        />
+      )}
 
       <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm text-muted-foreground">
         <dt>{t.player.controls.dpad}</dt>

@@ -7,6 +7,7 @@ use tetanes_core::{
     control_deck::{Config, ControlDeck},
     input::{JoypadBtnState, Player},
     memory::RamState,
+    patch::Patch,
     prelude::{NesRegion, ResetKind},
     video::{Frame, VideoFilter},
 };
@@ -62,6 +63,25 @@ impl Nes {
 
     pub fn reset(&mut self) {
         self.deck.reset(ResetKind::Soft);
+    }
+
+    /// Cheat: reads of `addr` return `data` (only where the byte there is `compare`,
+    /// when `compare` is 0..=255; pass -1 for none). Game Genie codes are decoded to
+    /// these by the caller. Patches belong to the session: save states, rollback
+    /// slots and loading a ROM leave them alone.
+    #[wasm_bindgen(js_name = addPatch)]
+    pub fn add_patch(&mut self, addr: u16, data: u8, compare: i32) {
+        let compare = u8::try_from(compare).ok();
+        self.deck.add_patch(Patch::new(addr, data, compare));
+    }
+
+    /// Remove every cheat.
+    #[wasm_bindgen(js_name = clearPatches)]
+    pub fn clear_patches(&mut self) {
+        let addrs: Vec<u16> = self.deck.patches().map(|patch| patch.addr).collect();
+        for addr in addrs {
+            self.deck.remove_patch(addr);
+        }
     }
 
     /// Runs one frame. `p1`/`p2` are button masks in NES shift-register order.

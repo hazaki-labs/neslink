@@ -10,6 +10,7 @@ import {
   type ServerMessage,
   type PeerPacket,
   type ReactionKind,
+  type CheatChange,
   type RelaySelection,
   NETPLAY_RECONNECT_GRACE_MS,
 } from "@neslink/core/netplay";
@@ -35,6 +36,8 @@ export interface GameStart {
   inputs: [seat: number, frame: number, mask: number][];
   /** Seats nobody plays; the first seat's player stands in for them. */
   vacant: number[];
+  /** The host's cheat changes: the last before startFrame applies at the start, later ones on their frame. */
+  cheats: CheatChange[];
 }
 
 /** Who this tab is in the room, to rejoin as after a drop or a refresh. */
@@ -68,6 +71,8 @@ export interface NetplayEvents {
   onReaction(from: string, kind: ReactionKind): void;
   /** Seat `seat` loads base64 save state `data` before `frame`; its input for that frame follows. */
   onLoad(seat: number, frame: number, data: string): void;
+  /** The host's cheats from `frame` on; its input for that frame follows. */
+  onCheats(frame: number, codes: string[]): void;
   /** Seat `seat` fell vacant: fill it in with neutral input from `frame` (or from what we hold). */
   onStandIn(seat: number, frame: number | undefined): void;
   /** Someone takes seat `seat`: stop standing in for it, and report with `sendHandedOver`. */
@@ -216,6 +221,11 @@ export class NetplayLink {
   }
 
   /** Our input for `frame`, or (with `seat`) the one we fill in for that vacant seat. */
+  /** Host: these cheats apply from `frame` on; send ahead of that frame's input. */
+  sendCheats(frame: number, codes: string[]): void {
+    this.send({ t: "cheats", f: frame, codes });
+  }
+
   sendInput(frame: number, mask: number, advantage?: number, seat?: number): void {
     this.send({ t: "input", f: frame, m: mask, a: advantage, s: seat });
   }
@@ -308,6 +318,7 @@ export class NetplayLink {
           snapshotLoaded: message.from?.loaded === true,
           inputs: message.inputs ?? [],
           vacant: message.vacant ?? [],
+          cheats: message.cheats ?? [],
         });
         this.stopRelay();
         const node = this.room?.relay?.nodes.find((node) => node.id === this.room?.relay?.activeNodeId);
@@ -325,6 +336,9 @@ export class NetplayLink {
         break;
       case "load":
         this.events.onLoad(message.s, message.f, message.data);
+        break;
+      case "cheats":
+        this.events.onCheats(message.f, message.codes);
         break;
       case "standIn":
         this.events.onStandIn(message.s, message.f);
