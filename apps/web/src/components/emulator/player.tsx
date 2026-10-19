@@ -246,6 +246,27 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
 
   const playingSeat = net.playing && net.seat !== null;
   const isHost = net.you !== null && net.room?.hostId === net.you;
+  // Same rules as the buttons: in a room, save while a game runs, load only when seated.
+  const canSave = !roomId || net.playing;
+  const canLoad = (!roomId || playingSeat) && hasSave;
+
+  // T saves, 0 loads. The handler reads the latest state through a ref.
+  const quickKeys = useRef({ canSave, canLoad, saveState, loadState });
+  useEffect(() => {
+    quickKeys.current = { canSave, canLoad, saveState, loadState };
+  });
+  useEffect(() => {
+    if (!client) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      const keys = quickKeys.current;
+      if (event.code === "KeyT" && keys.canSave) void keys.saveState();
+      else if ((event.code === "Digit0" || event.code === "Numpad0") && keys.canLoad) void keys.loadState();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [client]);
 
   return (
     <div className="flex w-full max-w-4xl flex-col gap-4">
@@ -356,14 +377,14 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
             {t.player.reset}
           </Button>
         )}
-        {(!roomId || net.playing) && (
+        {canSave && (
           <Button variant="outline" onClick={saveState}>
             <Save data-icon="inline-start" />
             {t.player.save}
           </Button>
         )}
         {(!roomId || playingSeat) && (
-          <Button variant="outline" onClick={loadState} disabled={!hasSave}>
+          <Button variant="outline" onClick={loadState} disabled={!canLoad}>
             <Download data-icon="inline-start" />
             {t.player.load}
           </Button>
@@ -383,6 +404,8 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         <dd>J / K</dd>
         <dt>Select / Start</dt>
         <dd>V / B</dd>
+        <dt>{t.player.controls.saveLoad}</dt>
+        <dd>T / 0</dd>
         <dt>{t.player.controls.gamepad}</dt>
         <dd>{t.player.controls.gamepadHint}</dd>
         {roomId && (
