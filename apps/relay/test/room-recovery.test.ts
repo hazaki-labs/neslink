@@ -211,7 +211,7 @@ it("relays and logs the host's reset input", async () => {
   await send(room, guest, { t: "seat", seat: 1 });
   await send(room, host, { t: "start" });
   await send(room, host, { t: "input", f: 5, m: 0x101 });
-  await send(room, host, { t: "input", f: 6, m: 0x400 });
+  await send(room, host, { t: "input", f: 6, m: 0x800 });
   expect(guest.messages).toContainEqual({ t: "input", s: 0, f: 5, m: 0x101 });
   expect(guest.messages.some((m) => m.t === "input" && m.f === 6)).toBe(false);
 });
@@ -231,4 +231,28 @@ it("hands a player's loaded state to the others and to newcomers", async () => {
   expect(late.messages.find((m) => m.t === "start")).toMatchObject({
     from: { f: 600, s: "guest-save", loaded: true }, inputs: [[1, 600, 0x200]],
   });
+});
+
+it("passes the host's cheats on, and gives newcomers the ones in force at the snapshot and after", async () => {
+  const h = harness(); const room = await h.load(); await room.init(info);
+  const host = await h.join(room, "Host"); const guest = await h.join(room, "Guest");
+  await send(room, guest, { t: "seat", seat: 1 });
+  await send(room, host, { t: "start" });
+  // Only the host may change cheats.
+  await send(room, guest, { t: "cheats", f: 10, codes: ["SXIOPO"] });
+  expect(host.messages.some((m) => m.t === "cheats")).toBe(false);
+  await send(room, host, { t: "cheats", f: 100, codes: ["SXIOPO"] });
+  await send(room, host, { t: "cheats", f: 500, codes: [] });
+  await send(room, host, { t: "cheats", f: 700, codes: ["0032:09"] });
+  expect(guest.messages).toContainEqual({ t: "cheats", f: 100, codes: ["SXIOPO"] });
+  // A snapshot at 600: the change at 500 is in force there; 100 is no longer needed.
+  await send(room, host, { t: "snapshot", f: 600, s: "state" });
+  const late = await h.join(room, "Late");
+  expect(late.messages.find((m) => m.t === "start").cheats).toEqual([
+    { f: 500, codes: [] },
+    { f: 700, codes: ["0032:09"] },
+  ]);
+  // Too many codes is malformed and ignored.
+  await send(room, host, { t: "cheats", f: 800, codes: Array.from({ length: 65 }, () => "SXIOPO") });
+  expect(guest.messages.some((m) => m.t === "cheats" && m.f === 800)).toBe(false);
 });

@@ -38,10 +38,24 @@ export const NETPLAY_RESET = 0x100;
  * that frame. Applied in seat order, so if both load on one frame the higher seat wins.
  */
 export const NETPLAY_LOAD = 0x200;
+/**
+ * Set on the host's input for a frame: from that frame on, the cheats the
+ * host sent (`cheats` message, ahead of the input) apply, for everyone.
+ */
+export const NETPLAY_CHEATS = 0x400;
 /** Bits above the buttons: things that happen once, on the frame they were sent for. */
-export const NETPLAY_EVENTS = NETPLAY_RESET | NETPLAY_LOAD;
+export const NETPLAY_EVENTS = NETPLAY_RESET | NETPLAY_LOAD | NETPLAY_CHEATS;
 /** Largest input mask on the wire: the eight buttons plus the event bits. */
-export const NETPLAY_MAX_MASK = 0x3ff;
+export const NETPLAY_MAX_MASK = 0x7ff;
+/** Most cheats one change may carry, and the longest code text. */
+export const NETPLAY_MAX_CHEATS = 64;
+export const NETPLAY_MAX_CHEAT_CHARS = 120;
+
+/** Cheat codes in force from frame `f` on (see NETPLAY_CHEATS). */
+export interface CheatChange {
+  f: number;
+  codes: string[];
+}
 
 /** Why the room refused a request. The UI turns these into text in the viewer's language. */
 export type RoomErrorCode =
@@ -133,6 +147,8 @@ export type ClientMessage =
   | { t: "snapshot"; f: number; s: string }
   /** Save state `s` (base64) this player loads before running frame `f` (its input there has NETPLAY_LOAD). */
   | { t: "load"; f: number; s: string }
+  /** Host only: these cheat codes apply from frame `f` on (its input there has NETPLAY_CHEATS). */
+  | { t: "cheats"; f: number; codes: string[] }
   /** WebRTC signaling (offer, answer, ICE candidate) for player `to`; relayed as is. */
   | { t: "signal"; to: string; data: unknown };
 
@@ -156,6 +172,11 @@ export type ServerMessage =
       inputs?: [seat: number, frame: number, mask: number][];
       /** Seats nobody plays, which the first seat's player stands in for (see `standIn`). */
       vacant?: number[];
+      /**
+       * Cheat changes from before the start frame on, oldest first: the last one
+       * before it is what applies at the start, later ones take effect on their frame.
+       */
+      cheats?: CheatChange[];
     }
   | { t: "input"; s: number; f: number; m: number; a?: number }
   /**
@@ -168,6 +189,8 @@ export type ServerMessage =
   | { t: "handover"; s: number }
   /** Seat `s` loads save state `data` before frame `f`; sent ahead of that input. */
   | { t: "load"; s: number; f: number; data: string }
+  /** The host's cheats from frame `f` on; sent ahead of the host's input for that frame. */
+  | { t: "cheats"; f: number; codes: string[] }
   | { t: "desync"; f: number }
   | { t: "signal"; from: string; data: unknown }
   | { t: "error"; code: RoomErrorCode };

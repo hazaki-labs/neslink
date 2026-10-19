@@ -2,7 +2,10 @@ import { DurableObject } from "cloudflare:workers";
 import {
   chooseNetplayDelay,
   NETPLAY_PING,
+  NETPLAY_MAX_CHEAT_CHARS,
+  NETPLAY_MAX_CHEATS,
   NETPLAY_MAX_MASK,
+  type CheatChange,
   NETPLAY_PONG,
   NETPLAY_RECONNECT_GRACE_MS,
   NETPLAY_SEATS,
@@ -55,6 +58,8 @@ interface ActiveGame {
   activeNodeId: string | null;
   /** Seats of the game nobody plays; the first seat's player stands in for them. */
   vacant?: number[];
+  /** The host's cheat changes still needed to join: the one in force at the snapshot, and later ones. */
+  cheats?: CheatChange[];
 }
 
 /** Snapshot/input history stays in memory; running inputs keep the object awake. */
@@ -267,6 +272,11 @@ export class Room extends DurableObject<Env> {
           await this.loadState(ws, me.seat, message.f, message.s);
         }
         break;
+      case "cheats":
+        if (this.playing(me) && me.id === this.hostId && isFrame(message.f) && isCheatList(message.codes)) {
+          await this.changeCheats(ws, message.f, message.codes);
+        }
+        break;
       case "signal":
         if (me && typeof message.to === "string") this.relaySignal(me, message.to, message.data);
         break;
@@ -352,7 +362,9 @@ export class Room extends DurableObject<Env> {
   private async saveActiveGame() {
     const game = this.game;
     if (!game) return;
-    const active: ActiveGame = { id: game.id, delay: game.delay, seats: game.seats, activeNodeId: game.activeNodeId, vacant: game.vacant };
+    const active: ActiveGame = {
+      id: game.id, delay: game.delay, seats: game.seats, activeNodeId: game.activeNodeId, vacant: game.vacant, cheats: game.cheats,
+    };
     await this.ctx.storage.put("activeGame", active);
   }
 
@@ -501,6 +513,7 @@ export class Room extends DurableObject<Env> {
       from: game.snapshot ? { f: game.snapshot.f, s: game.snapshot.s, loaded: game.snapshot.loaded } : undefined,
       inputs: game.log,
       vacant: game.vacant ?? [],
+      cheats: game.cheats ?? [],
     });
   }
 
@@ -602,6 +615,7 @@ export class Room extends DurableObject<Env> {
     game.historyComplete = true;
     // Inputs before the snapshot are inside it now.
     game.log = game.log.filter(([, f]) => f >= frame);
+    this.trimCheats(frame);
     for (const ws of this.ctx.getWebSockets()) {
       const me = this.player(ws);
       if (me?.awaitingSnapshot) this.sendGameInProgress(ws, me);
@@ -623,9 +637,30 @@ export class Room extends DurableObject<Env> {
       game.snapshot = { f: frame, s: state, loaded: true, seat };
       game.historyComplete = true;
       game.log = game.log.filter(([, f]) => f >= frame);
+      this.trimCheats(frame);
       if (this.pending.size > 0) await this.saveHistory();
     }
     this.broadcast({ t: "load", s: seat, f: frame, data: state }, ws);
+  }
+
+  /** The host's cheats apply from `frame` on; everyone else gets them ahead of that input. */
+  private async changeCheats(ws: WebSocket, frame: number, codes: string[]) {
+    const game = this.game;
+    if (!game) return;
+    const cheats = (game.cheats ?? []).filter((change) => change.f !== frame);
+    cheats.push({ f: frame, codes });
+    cheats.sort((a, b) => a.f - b.f);
+    game.cheats = cheats;
+    await this.saveActiveGame();
+    this.broadcast({ t: "cheats", f: frame, codes }, ws);
+  }
+
+  /** A snapshot before `frame` replaces history: keep the change in force there, and later ones. */
+  private trimCheats(frame: number) {
+    const cheats = this.game?.cheats;
+    if (!cheats?.length) return;
+    const before = cheats.filter((change) => change.f < frame);
+    this.game!.cheats = [...before.slice(-1), ...cheats.filter((change) => change.f >= frame)];
   }
 
   private checkHash(frame: number, seat: number, hash: number) {
@@ -713,4 +748,9 @@ function isFrame(value: unknown): value is number {
 
 function isMask(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= NETPLAY_MAX_MASK;
+}
+
+function isCheatList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length <= NETPLAY_MAX_CHEATS &&
+    value.every((code) => typeof code === "string" && code.length <= NETPLAY_MAX_CHEAT_CHARS);
 }

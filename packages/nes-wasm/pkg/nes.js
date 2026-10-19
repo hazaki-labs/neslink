@@ -12,11 +12,29 @@ export class Nes {
         wasm.__wbg_nes_free(ptr, 0);
     }
     /**
+     * Cheat: reads of `addr` return `data` (only where the byte there is `compare`,
+     * when `compare` is 0..=255; pass -1 for none). Game Genie codes are decoded to
+     * these by the caller. Patches belong to the session: save states, rollback
+     * slots and loading a ROM leave them alone.
+     * @param {number} addr
+     * @param {number} data
+     * @param {number} compare
+     */
+    addPatch(addr, data, compare) {
+        wasm.nes_addPatch(this.__wbg_ptr, addr, data, compare);
+    }
+    /**
      * @returns {number}
      */
     audioPtr() {
         const ret = wasm.nes_audioPtr(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * Remove every cheat.
+     */
+    clearPatches() {
+        wasm.nes_clearPatches(this.__wbg_ptr);
     }
     /**
      * Moves pending mono samples into an internal buffer; returns how many there are.
