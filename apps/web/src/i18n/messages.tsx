@@ -83,6 +83,7 @@ const zh = {
     emulationStopped: (detail: string) => `模拟器已停止：${detail}`,
     audioUnavailable: (detail: string) => `无法播放声音：${detail}`,
     keys: "按键",
+    touchControls: "虚拟按键",
     closePanel: "关闭",
     controls: {
       dpad: "方向",
@@ -246,6 +247,7 @@ const en: Messages = {
     emulationStopped: (detail) => `Emulation stopped: ${detail}`,
     audioUnavailable: (detail) => `Audio unavailable: ${detail}`,
     keys: "Keys",
+    touchControls: "On-screen controller",
     closePanel: "Close",
     controls: {
       dpad: "D-pad",

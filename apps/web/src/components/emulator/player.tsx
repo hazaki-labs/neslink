@@ -11,6 +11,7 @@ import {
   type RoomInfo,
   type RoomState,
   type Cheat,
+  IDLE_CONTROLLER,
 } from "@neslink/core";
 import { Button } from "@/components/ui/button";
 import { useI18n, type Messages } from "@/i18n";
@@ -27,6 +28,7 @@ import { getSave, putSave, type StoredRom } from "@/lib/storage";
 import { loadCheats, saveCheats } from "@/lib/cheats";
 import { CheatPanel } from "./cheat-panel";
 import { RoomLobby } from "./room-lobby";
+import { TouchControls } from "./touch-controls";
 
 const QUICK_SLOT = 0;
 
@@ -112,6 +114,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
   const roomId = room?.id ?? null;
   /** The area the game gets (fit to it, and what goes fullscreen) and the framed screen inside it. */
   const stageRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
   const [client, setClient] = useState<EmulatorClient | null>(null);
   const [paused, setPaused] = useState(false);
@@ -136,6 +139,14 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
       : null,
   );
   const togglePanel = (next: "keys" | "cheats") => setPanel((open) => (open === next ? null : next));
+  /** The on-screen controller: on by default on touch screens, and remembered once switched. */
+  const [showTouch, setShowTouch] = useState(loadTouchPreference);
+  const toggleTouch = () => {
+    // Hiding it lets go of anything it was holding.
+    if (showTouch) setTouchInput(IDLE_CONTROLLER);
+    saveTouchPreference(!showTouch);
+    setShowTouch(!showTouch);
+  };
   const [roomCheats, setRoomCheats] = useState<string[]>([]);
   const lastReaction = useRef(0);
 
@@ -222,7 +233,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     saveCheats(rom.hash, next);
   };
 
-  useControllerInput(client);
+  const setTouchInput = useControllerInput(client);
 
   // Q sends everyone a thumbs-up for a great move (rooms only, not while typing).
   useEffect(() => {
@@ -316,7 +327,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
 
   return (
     // The whole window, never more: the screen takes what the bars leave, so the page never scrolls.
-    <div className="fixed inset-0 flex flex-col gap-3 bg-background p-3 sm:p-4">
+    <div ref={pageRef} className="fixed inset-0 flex flex-col gap-3 bg-background p-3 sm:p-4">
       <header className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
         <Button variant="ghost" size="sm" onClick={onExit}>
           <ArrowLeft data-icon="inline-start" />
@@ -447,7 +458,9 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
+      {showTouch && <TouchControls onChange={setTouchInput} />}
+
+      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
         {/*
           Pausing alone would desync a netplay game. Reset and load go to everyone
           through the player's input: the host resets, any player loads.
@@ -455,7 +468,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         {!roomId && (
           <Button variant="outline" size="sm" onClick={togglePause}>
             {paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
-            {paused ? t.player.resume : t.player.pause}
+            <span className="max-sm:sr-only">{paused ? t.player.resume : t.player.pause}</span>
           </Button>
         )}
         {roomId && openSeat !== undefined && (
@@ -467,33 +480,41 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
         {(!roomId || (playingSeat && isHost)) && (
           <Button variant="outline" size="sm" onClick={() => client?.reset()}>
             <RotateCcw data-icon="inline-start" />
-            {t.player.reset}
+            <span className="max-sm:sr-only">{t.player.reset}</span>
           </Button>
         )}
         {canSave && (
           <Button variant="outline" size="sm" onClick={saveState}>
             <Save data-icon="inline-start" />
-            {t.player.save}
+            <span className="max-sm:sr-only">{t.player.save}</span>
           </Button>
         )}
         {(!roomId || playingSeat) && (
           <Button variant="outline" size="sm" onClick={loadState} disabled={!canLoad}>
             <Download data-icon="inline-start" />
-            {t.player.load}
+            <span className="max-sm:sr-only">{t.player.load}</span>
           </Button>
         )}
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex gap-1.5 sm:gap-2">
+          <Button variant="outline" size="sm" aria-pressed={showTouch} onClick={toggleTouch} aria-label={t.player.touchControls}>
+            <Gamepad2 />
+          </Button>
           <Button variant="outline" size="sm" aria-expanded={panel === "keys"} onClick={() => togglePanel("keys")}>
             <Keyboard data-icon="inline-start" />
-            {t.player.keys}
+            <span className="max-sm:sr-only">{t.player.keys}</span>
           </Button>
           <Button variant="outline" size="sm" aria-expanded={panel === "cheats"} onClick={() => togglePanel("cheats")}>
             <Sparkles data-icon="inline-start" />
-            {t.cheats.title}
+            <span className="max-sm:sr-only">{t.cheats.title}</span>
           </Button>
-          <Button variant="outline" size="sm" onClick={() => stageRef.current?.requestFullscreen()}>
+          {/* With the on-screen controller showing, the whole page goes fullscreen so it comes along. */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => (showTouch ? pageRef.current : stageRef.current)?.requestFullscreen?.()}
+          >
             <Maximize data-icon="inline-start" />
-            {t.player.fullscreen}
+            <span className="max-sm:sr-only">{t.player.fullscreen}</span>
           </Button>
         </div>
       </div>
@@ -542,4 +563,24 @@ function fitIntegerScale(container: HTMLElement, canvas: HTMLCanvasElement): () 
     observer.disconnect();
     window.removeEventListener("resize", fit);
   };
+}
+
+const TOUCH_KEY = "neslink:touchControls";
+
+function loadTouchPreference(): boolean {
+  try {
+    const saved = localStorage.getItem(TOUCH_KEY);
+    if (saved !== null) return saved === "1";
+  } catch {
+    // Fall through to the default.
+  }
+  return window.matchMedia("(pointer: coarse)").matches;
+}
+
+function saveTouchPreference(on: boolean) {
+  try {
+    localStorage.setItem(TOUCH_KEY, on ? "1" : "0");
+  } catch {
+    // Only remembered for this visit.
+  }
 }
