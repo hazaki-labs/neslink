@@ -43,7 +43,7 @@ export function CheatPanel({
     "min-w-0 rounded-md border border-input bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border p-3 text-sm">
+    <div className="flex flex-col gap-3 text-sm">
       <p className="text-muted-foreground">
         {mode === "solo" ? t.cheats.hintSolo : mode === "host" ? t.cheats.hintHost : t.cheats.hintGuest}
       </p>

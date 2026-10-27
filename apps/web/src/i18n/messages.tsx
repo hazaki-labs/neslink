@@ -82,6 +82,9 @@ const zh = {
     desync: (frame: number) => `检测到画面不同步（第 ${frame} 帧）`,
     emulationStopped: (detail: string) => `模拟器已停止：${detail}`,
     audioUnavailable: (detail: string) => `无法播放声音：${detail}`,
+    keys: "按键",
+    touchControls: "虚拟按键",
+    closePanel: "关闭",
     controls: {
       dpad: "方向",
       turbo: "连发 B / A",
@@ -243,6 +246,9 @@ const en: Messages = {
     desync: (frame) => `Games went out of sync (frame ${frame})`,
     emulationStopped: (detail) => `Emulation stopped: ${detail}`,
     audioUnavailable: (detail) => `Audio unavailable: ${detail}`,
+    keys: "Keys",
+    touchControls: "On-screen controller",
+    closePanel: "Close",
     controls: {
       dpad: "D-pad",
       turbo: "Turbo B / A",
