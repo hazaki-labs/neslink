@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Download, Gamepad2, Maximize, Pause, Play, RotateCcw, Save, Sparkles } from "lucide-react";
+import {
+  ArrowLeft, Download, Gamepad2, Keyboard, Maximize, Pause, Play, RotateCcw, Save, Sparkles, X,
+} from "lucide-react";
 import {
   NES_FRAME_RATE,
   NES_HEIGHT,
@@ -97,6 +99,10 @@ function describeError(t: Messages, error: EmulatorError): string {
 /** Text worded at render time, so switching language rewords what is on screen. */
 type Text = (t: Messages) => string;
 
+/** Rough room the side panel (with its gap) and the top and bottom bars take, in CSS pixels. */
+const PANEL_SPACE = 360;
+const BARS_SPACE = 120;
+
 /** How long a thumbs-up stays on screen, and the fewest ms between two of ours. */
 const REACTION_MS = 1600;
 const REACTION_SPACING_MS = 400;
@@ -104,6 +110,8 @@ const REACTION_SPACING_MS = 400;
 /** Plays a ROM alone, or in a netplay room when `room` is given. */
 export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo; onExit: () => void }) {
   const roomId = room?.id ?? null;
+  /** The area the game gets (fit to it, and what goes fullscreen) and the framed screen inside it. */
+  const stageRef = useRef<HTMLDivElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
   const [client, setClient] = useState<EmulatorClient | null>(null);
   const [paused, setPaused] = useState(false);
@@ -118,7 +126,16 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
   const reactionId = useRef(0);
   /** Our cheats for this ROM, and what the room's game runs with (the host's). */
   const [cheats, setCheats] = useState<Cheat[]>(() => loadCheats(rom.hash));
-  const [showCheats, setShowCheats] = useState(false);
+  /**
+   * The side panel: key list or cheats. It starts with the keys showing only
+   * where the window has width to spare beside a screen as tall as it can be.
+   */
+  const [panel, setPanel] = useState<"keys" | "cheats" | null>(() =>
+    window.innerWidth >= 1024 && window.innerWidth - PANEL_SPACE >= (window.innerHeight - BARS_SPACE) * (NES_WIDTH / NES_HEIGHT)
+      ? "keys"
+      : null,
+  );
+  const togglePanel = (next: "keys" | "cheats") => setPanel((open) => (open === next ? null : next));
   const [roomCheats, setRoomCheats] = useState<string[]>([]);
   const lastReaction = useRef(0);
 
@@ -136,6 +153,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
 
   useEffect(() => {
     const screen = screenRef.current!;
+    const stage = stageRef.current!;
     const emulator: EmulatorClient = new EmulatorClient({
       onReady: () => setClient(emulator),
       onStats: setStats,
@@ -156,7 +174,7 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
     });
     emulator.canvas.className = "[image-rendering:pixelated]";
     screen.appendChild(emulator.canvas);
-    const stopFitting = fitIntegerScale(screen, emulator.canvas);
+    const stopFitting = fitIntegerScale(stage, emulator.canvas);
     if (roomId) {
       emulator.loadRom(rom.data, false);
       emulator.joinRoom(roomSocketUrl(roomId), playerName(), rom.hash, simulatedNetwork(), directLinkPolicy());
@@ -297,8 +315,9 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
   }, [client]);
 
   return (
-    <div className="flex w-full max-w-4xl flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
+    // The whole window, never more: the screen takes what the bars leave, so the page never scrolls.
+    <div className="fixed inset-0 flex flex-col gap-3 bg-background p-3 sm:p-4">
+      <header className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
         <Button variant="ghost" size="sm" onClick={onExit}>
           <ArrowLeft data-icon="inline-start" />
           {roomId ? t.player.leaveRoom : t.library.title}
@@ -340,123 +359,161 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
           {stats === null ? "--" : stats.fps.toFixed(1)} fps
           {stats?.refreshHz && ` · ${Math.round(stats.refreshHz)}Hz${stats.vsyncLocked ? ` ${t.player.vsync}` : ""}`}
         </span>
-      </div>
+      </header>
 
-      <div
-        ref={screenRef}
-        className="relative flex aspect-[256/240] w-full items-center justify-center overflow-hidden rounded-lg border-2 border-muted-foreground/40 bg-black"
-      >
-        {roomId && !net.playing && (
-          <RoomLobby
-            status={net.status}
-            room={net.room}
-            you={net.you}
-            notice={net.notice}
-            onStart={() => client?.startRoom()}
-            onSeat={(seat) => client?.takeSeat(seat)}
-            onRelaySelect={(selection) => client?.selectRelay(selection)}
-            onRename={rename}
-          />
-        )}
-        {roomId && net.playing && (net.status === "reconnecting" || away.length > 0) && (
-          <div className="absolute inset-x-0 bottom-4 z-10 mx-auto w-fit rounded-md bg-black/75 px-3 py-1.5 text-sm text-amber-200">
-            {net.status === "reconnecting" ? t.player.reconnecting : t.player.waitingFor(away.map((p) => p.name).join(t.lobby.listSeparator))}
-          </div>
-        )}
-        {reactions.map((r) => (
+      <div className="relative flex min-h-0 flex-1 gap-4">
+        <div ref={stageRef} className="flex min-h-0 min-w-0 flex-1 items-center justify-center [&:fullscreen]:bg-black">
           <div
-            key={r.id}
-            className="pointer-events-none absolute bottom-10 z-20 flex flex-col items-center animate-[reaction-float_1.6s_ease-out_forwards]"
-            style={{ left: `${r.x}%` }}
+            ref={screenRef}
+            className="relative flex items-center justify-center overflow-hidden rounded-lg border-2 border-muted-foreground/40 bg-black"
           >
-            <span className="text-5xl drop-shadow-[0_2px_4px_rgba(0,0,0,0.6)]">👍</span>
-            <span className="mt-1 rounded bg-black/60 px-1.5 text-xs text-white">
-              {r.from === null ? t.player.reactionYou : (net.room?.players.find((p) => p.id === r.from)?.name ?? "")}
-            </span>
+            {roomId && !net.playing && (
+              <RoomLobby
+                status={net.status}
+                room={net.room}
+                you={net.you}
+                notice={net.notice}
+                onStart={() => client?.startRoom()}
+                onSeat={(seat) => client?.takeSeat(seat)}
+                onRelaySelect={(selection) => client?.selectRelay(selection)}
+                onRename={rename}
+              />
+            )}
+            {roomId && net.playing && (net.status === "reconnecting" || away.length > 0) && (
+              <div className="absolute inset-x-0 bottom-4 z-10 mx-auto w-fit rounded-md bg-black/75 px-3 py-1.5 text-sm text-amber-200">
+                {net.status === "reconnecting" ? t.player.reconnecting : t.player.waitingFor(away.map((p) => p.name).join(t.lobby.listSeparator))}
+              </div>
+            )}
+            {reactions.map((r) => (
+              <div
+                key={r.id}
+                className="pointer-events-none absolute bottom-10 z-20 flex flex-col items-center animate-[reaction-float_1.6s_ease-out_forwards]"
+                style={{ left: `${r.x}%` }}
+              >
+                <span className="text-5xl drop-shadow-[0_2px_4px_rgba(0,0,0,0.6)]">👍</span>
+                <span className="mt-1 rounded bg-black/60 px-1.5 text-xs text-white">
+                  {r.from === null ? t.player.reactionYou : (net.room?.players.find((p) => p.id === r.from)?.name ?? "")}
+                </span>
+              </div>
+            ))}
+            {message && (
+              <div className="absolute inset-x-0 top-3 z-10 mx-auto w-fit rounded-md bg-black/70 px-3 py-1.5 text-sm text-white">
+                {message(t)}
+              </div>
+            )}
           </div>
-        ))}
-        {message && (
-          <div className="absolute inset-x-0 top-3 z-10 mx-auto w-fit rounded-md bg-black/70 px-3 py-1.5 text-sm text-white">
-            {message(t)}
-          </div>
+        </div>
+
+        {panel && (
+          <aside
+            className="absolute inset-x-0 bottom-0 z-30 flex max-h-[75%] flex-col gap-3 overflow-y-auto rounded-lg border bg-background/95 p-4 shadow-xl backdrop-blur lg:static lg:max-h-none lg:w-80 lg:shrink-0 lg:bg-card/40 lg:shadow-none lg:backdrop-blur-none"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-medium">{panel === "keys" ? t.player.keys : t.cheats.title}</h2>
+              <Button variant="ghost" size="icon-sm" aria-label={t.player.closePanel} onClick={() => setPanel(null)}>
+                <X />
+              </Button>
+            </div>
+            {panel === "keys" ? (
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+                <dt className="text-muted-foreground">{t.player.controls.dpad}</dt>
+                <dd><Keys keys={["W", "A", "S", "D"]} /></dd>
+                <dt className="text-muted-foreground">B / A</dt>
+                <dd><Keys keys={["N", "M"]} /></dd>
+                <dt className="text-muted-foreground">{t.player.controls.turbo}</dt>
+                <dd><Keys keys={["J", "K"]} /></dd>
+                <dt className="text-muted-foreground">Select / Start</dt>
+                <dd><Keys keys={["V", "B"]} /></dd>
+                <dt className="text-muted-foreground">{t.player.controls.saveLoad}</dt>
+                <dd><Keys keys={["1", "0"]} /></dd>
+                {roomId && (
+                  <>
+                    <dt className="text-muted-foreground">{t.player.controls.thumbsUp}</dt>
+                    <dd><Keys keys={["Q"]} /></dd>
+                  </>
+                )}
+                <dt className="text-muted-foreground">{t.player.controls.gamepad}</dt>
+                <dd className="text-muted-foreground">{t.player.controls.gamepadHint}</dd>
+              </dl>
+            ) : (
+              <CheatPanel
+                cheats={cheats}
+                onChange={changeCheats}
+                mode={!roomId ? "solo" : isHost ? "host" : "guest"}
+                roomCodes={roomId ? roomCheats : null}
+              />
+            )}
+          </aside>
         )}
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {/*
           Pausing alone would desync a netplay game. Reset and load go to everyone
           through the player's input: the host resets, any player loads.
         */}
         {!roomId && (
-          <Button variant="outline" onClick={togglePause}>
+          <Button variant="outline" size="sm" onClick={togglePause}>
             {paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
             {paused ? t.player.resume : t.player.pause}
           </Button>
         )}
         {roomId && openSeat !== undefined && (
-          <Button onClick={() => client?.takeSeat(openSeat)}>
+          <Button size="sm" onClick={() => client?.takeSeat(openSeat)}>
             <Gamepad2 data-icon="inline-start" />
             {t.player.takeSeat(openSeat + 1)}
           </Button>
         )}
         {(!roomId || (playingSeat && isHost)) && (
-          <Button variant="outline" onClick={() => client?.reset()}>
+          <Button variant="outline" size="sm" onClick={() => client?.reset()}>
             <RotateCcw data-icon="inline-start" />
             {t.player.reset}
           </Button>
         )}
         {canSave && (
-          <Button variant="outline" onClick={saveState}>
+          <Button variant="outline" size="sm" onClick={saveState}>
             <Save data-icon="inline-start" />
             {t.player.save}
           </Button>
         )}
         {(!roomId || playingSeat) && (
-          <Button variant="outline" onClick={loadState} disabled={!canLoad}>
+          <Button variant="outline" size="sm" onClick={loadState} disabled={!canLoad}>
             <Download data-icon="inline-start" />
             {t.player.load}
           </Button>
         )}
-        <Button variant="outline" aria-expanded={showCheats} onClick={() => setShowCheats((open) => !open)}>
-          <Sparkles data-icon="inline-start" />
-          {t.cheats.title}
-        </Button>
-        <Button variant="outline" className="ml-auto" onClick={() => screenRef.current?.requestFullscreen()}>
-          <Maximize data-icon="inline-start" />
-          {t.player.fullscreen}
-        </Button>
+        <div className="ml-auto flex gap-2">
+          <Button variant="outline" size="sm" aria-expanded={panel === "keys"} onClick={() => togglePanel("keys")}>
+            <Keyboard data-icon="inline-start" />
+            {t.player.keys}
+          </Button>
+          <Button variant="outline" size="sm" aria-expanded={panel === "cheats"} onClick={() => togglePanel("cheats")}>
+            <Sparkles data-icon="inline-start" />
+            {t.cheats.title}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => stageRef.current?.requestFullscreen()}>
+            <Maximize data-icon="inline-start" />
+            {t.player.fullscreen}
+          </Button>
+        </div>
       </div>
-
-      {showCheats && (
-        <CheatPanel
-          cheats={cheats}
-          onChange={changeCheats}
-          mode={!roomId ? "solo" : isHost ? "host" : "guest"}
-          roomCodes={roomId ? roomCheats : null}
-        />
-      )}
-
-      <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm text-muted-foreground">
-        <dt>{t.player.controls.dpad}</dt>
-        <dd>W A S D</dd>
-        <dt>B / A</dt>
-        <dd>N / M</dd>
-        <dt>{t.player.controls.turbo}</dt>
-        <dd>J / K</dd>
-        <dt>Select / Start</dt>
-        <dd>V / B</dd>
-        <dt>{t.player.controls.saveLoad}</dt>
-        <dd>1 / 0</dd>
-        <dt>{t.player.controls.gamepad}</dt>
-        <dd>{t.player.controls.gamepadHint}</dd>
-        {roomId && (
-          <>
-            <dt>{t.player.controls.thumbsUp}</dt>
-            <dd>Q</dd>
-          </>
-        )}
-      </dl>
     </div>
+  );
+}
+
+/** Keyboard keys, drawn as keycaps. */
+function Keys({ keys }: { keys: string[] }) {
+  return (
+    <span className="flex flex-wrap gap-1">
+      {keys.map((key) => (
+        <kbd
+          key={key}
+          className="min-w-6 rounded border border-b-2 bg-muted px-1.5 py-0.5 text-center font-mono text-xs text-foreground"
+        >
+          {key}
+        </kbd>
+      ))}
+    </span>
   );
 }
 
@@ -469,11 +526,10 @@ export function Player({ rom, room, onExit }: { rom: StoredRom; room?: RoomInfo;
 function fitIntegerScale(container: HTMLElement, canvas: HTMLCanvasElement): () => void {
   const fit = () => {
     const dpr = window.devicePixelRatio || 1;
-    const { clientWidth, clientHeight } = container;
-    const scale = Math.max(
-      1,
-      Math.floor(Math.min((clientWidth * dpr) / NES_WIDTH, (clientHeight * dpr) / NES_HEIGHT)),
-    );
+    // Room for the screen's frame (a 2px border each side).
+    const width = container.clientWidth - 4;
+    const height = container.clientHeight - 4;
+    const scale = Math.max(1, Math.floor(Math.min((width * dpr) / NES_WIDTH, (height * dpr) / NES_HEIGHT)));
     canvas.style.width = `${(NES_WIDTH * scale) / dpr}px`;
     canvas.style.height = `${(NES_HEIGHT * scale) / dpr}px`;
   };
